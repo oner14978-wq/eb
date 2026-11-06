@@ -36,6 +36,7 @@ jobs:
           java-version: '21'
 
       - name: Verify Java
+        shell: bash
         run: |
           set -euo pipefail
           java -version
@@ -59,29 +60,31 @@ jobs:
 
           echo "Android SDK: $SDK"
 
-          echo "Procurando plataformas Android 37 disponíveis..."
-
           sdkmanager --list > /tmp/sdk-list.txt
 
-          cat /tmp/sdk-list.txt | grep -E 'platforms;android-37|build-tools;37' || true
+          echo "Plataformas Android 37 disponíveis:"
+          grep -E 'platforms;android-37' /tmp/sdk-list.txt || true
 
-          PLATFORM_PACKAGE="$(grep -oE 'platforms;android-37[^[:space:]]*' /tmp/sdk-list.txt | sort -u | head -n 1 || true)"
+          PLATFORM_PACKAGE="$(
+            grep -oE 'platforms;android-37[^[:space:]]*' \
+              /tmp/sdk-list.txt |
+            sort -u |
+            head -n 1 || true
+          )"
 
           if [ -z "$PLATFORM_PACKAGE" ]; then
-            echo "ERRO: Nenhuma plataforma Android 37 encontrada."
-            echo "Pacotes disponíveis:"
-            grep -E 'platforms;android-' /tmp/sdk-list.txt | tail -30 || true
+            echo "ERRO: Plataforma Android 37 não encontrada."
+            grep -E 'platforms;android-' /tmp/sdk-list.txt || true
             exit 1
           fi
 
-          echo "Plataforma encontrada: $PLATFORM_PACKAGE"
+          echo "Instalando: $PLATFORM_PACKAGE"
 
           sdkmanager --install \
             "platform-tools" \
             "$PLATFORM_PACKAGE" \
             "ndk;25.2.9519653"
 
-          echo "Verificando NDK..."
           test -d "$SDK/ndk/25.2.9519653"
 
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
@@ -143,30 +146,35 @@ jobs:
 
           find . -type f \
             -not -path './.git/*' \
-            -printf '%p (%s bytes)\n' | sort
+            -printf '%p (%s bytes)\n' |
+            sort
 
           echo "======================================"
-          echo "ARQUIVOS ZIP E PARTES"
+          echo "PARTES DO ZALITH"
           echo "======================================"
 
-          find . -type f \
-            -not -path './.git/*' \
-            | grep -Ei '\.(zip|001|002|003)$' || true
+          ls -lh \
+            ./Zalith-01.zip \
+            ./Zalith-02.zip \
+            ./Zali-03.zip
 
       # ==========================================
-      # 6. LOCALIZAR OU RECONSTRUIR O PROJETO
+      # 6. RECONSTRUIR E EXTRAIR O PROJETO
       # ==========================================
 
-      - name: Locate and reconstruct project
+      - name: Reconstruct and extract project
         shell: bash
         run: |
           set -euo pipefail
 
           echo "Procurando Gradle Wrapper..."
 
-          WRAPPER="$(find . -type f -name gradlew \
-            -not -path './.git/*' \
-            -print -quit || true)"
+          WRAPPER="$(
+            find . -type f \
+              -name gradlew \
+              -not -path './.git/*' \
+              -print -quit || true
+          )"
 
           if [ -n "$WRAPPER" ]; then
             PROJECT_DIR="$(dirname "$WRAPPER")"
@@ -177,143 +185,123 @@ jobs:
           fi
 
           echo "Gradle Wrapper não encontrado."
-          echo "Procurando partes do projeto..."
+          echo "Usando os nomes reais das partes."
 
-          mapfile -t ALL_FILES < <(
-            find . -type f -not -path './.git/*' | sort
-          )
+          PART1="./Zalith-01.zip"
+          PART2="./Zalith-02.zip"
+          PART3="./Zali-03.zip"
 
-          echo "Total de arquivos: ${#ALL_FILES[@]}"
-
-          # Primeiro tenta identificar partes 01, 02 e 03.
-          # Também aceita nomes como:
-          # 01.zip
-          # projeto-01.zip
-          # ZalithLauncher2_01.zip
-          # parte01.zip
-
-          PART_FILES=()
-
-          for PART in 01 02 03; do
-
-            FOUND=()
-
-            for FILE in "${ALL_FILES[@]}"; do
-              BASE="$(basename "$FILE")"
-
-              if [[ "$BASE" =~ (^|[^0-9])${PART}(\.zip)?$ ]]; then
-                FOUND+=("$FILE")
-              fi
-            done
-
-            if [ "${#FOUND[@]}" -ne 1 ]; then
-              PART_FILES=()
-              break
+          for FILE in "$PART1" "$PART2" "$PART3"; do
+            if [ ! -f "$FILE" ]; then
+              echo "ERRO: Parte não encontrada: $FILE"
+              exit 1
             fi
 
-            PART_FILES+=("${FOUND[0]}")
+            if [ ! -s "$FILE" ]; then
+              echo "ERRO: Arquivo vazio: $FILE"
+              exit 1
+            fi
           done
 
-          # Se não encontrou 01/02/03, tenta .001/.002/.003.
-          if [ "${#PART_FILES[@]}" -eq 0 ]; then
+          echo "Partes identificadas:"
+          ls -lh "$PART1" "$PART2" "$PART3"
 
-            echo "Tentando identificar partes .001, .002 e .003..."
-
-            for SUFFIX in 001 002 003; do
-
-              FOUND=()
-
-              for FILE in "${ALL_FILES[@]}"; do
-                BASE="$(basename "$FILE")"
-
-                if [[ "$BASE" =~ \.zip\.${SUFFIX}$ ]] || \
-                   [[ "$BASE" =~ \.${SUFFIX}$ ]]; then
-                  FOUND+=("$FILE")
-                fi
-              done
-
-              if [ "${#FOUND[@]}" -ne 1 ]; then
-                PART_FILES=()
-                break
-              fi
-
-              PART_FILES+=("${FOUND[0]}")
-            done
-          fi
-
-          # Verificar se foram identificadas três partes.
-          if [ "${#PART_FILES[@]}" -ne 3 ]; then
-
-            echo "======================================"
-            echo "ERRO: NÃO FOI POSSÍVEL IDENTIFICAR AS 3 PARTES"
-            echo "======================================"
-
-            echo "Arquivos encontrados no repositório:"
-            printf '%s\n' "${ALL_FILES[@]}"
-
-            echo "Nomes esperados:"
-            echo "01.zip"
-            echo "02.zip"
-            echo "03.zip"
-
-            echo "Ou partes:"
-            echo "*.zip.001"
-            echo "*.zip.002"
-            echo "*.zip.003"
-
-            echo "Verifique se os arquivos foram enviados ao GitHub."
-            exit 1
-          fi
-
-          echo "======================================"
-          echo "PARTES IDENTIFICADAS"
-          echo "======================================"
-
-          printf '%s\n' "${PART_FILES[@]}"
-
-          # Reconstruir arquivo sequencial.
           mkdir -p /tmp/zalith-parts
-
           ARCHIVE="/tmp/zalith-parts/ZalithLauncher2.zip"
-          : > "$ARCHIVE"
 
-          for FILE in "${PART_FILES[@]}"; do
-            echo "Adicionando: $FILE"
-            cat "$FILE" >> "$ARCHIVE"
-          done
+          echo "Reconstruindo arquivo em ordem..."
 
-          echo "Verificando ZIP reconstruído..."
+          cat "$PART1" "$PART2" "$PART3" > "$ARCHIVE"
 
-          if ! unzip -t "$ARCHIVE"; then
-            echo "ERRO: As três partes não formam um ZIP válido."
-            echo "Elas precisam ser fragmentos binários do mesmo ZIP."
-            exit 1
-          fi
+          echo "Arquivo reconstruído:"
+          ls -lh "$ARCHIVE"
 
-          # Extrair projeto.
+          echo "Verificando assinatura e conteúdo do ZIP..."
+
           mkdir -p extracted
-          unzip -q "$ARCHIVE" -d extracted
 
-          echo "Procurando Gradle Wrapper após extração..."
+          python3 - "$ARCHIVE" "$PWD/extracted" <<'PY'
+          import sys
+          import zipfile
+          from pathlib import Path
 
-          WRAPPER="$(find extracted -type f \
-            -name gradlew -print -quit || true)"
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+
+          print("Arquivo:", archive)
+          print("Destino:", destination)
+
+          try:
+              with zipfile.ZipFile(archive, "r") as z:
+                  entries = z.infolist()
+
+                  if not entries:
+                      raise RuntimeError("O arquivo ZIP está vazio.")
+
+                  print("Arquivos encontrados:", len(entries))
+
+                  # Verifica a integridade de todos os arquivos.
+                  damaged = z.testzip()
+
+                  if damaged is not None:
+                      raise RuntimeError(
+                          "Arquivo danificado: " + damaged
+                      )
+
+                  print("Integridade dos arquivos confirmada.")
+
+                  # Impede caminhos de extração fora da pasta.
+                  root = destination.resolve()
+
+                  for entry in entries:
+                      target = (root / entry.filename).resolve()
+
+                      if target != root and root not in target.parents:
+                          raise RuntimeError(
+                              "Caminho inseguro no ZIP: " + entry.filename
+                          )
+
+                  print("Extraindo arquivos...")
+
+                  z.extractall(root)
+
+                  print("Extração concluída.")
+
+          except Exception as error:
+              print("ERRO AO PROCESSAR O ARQUIVO:", error)
+              sys.exit(1)
+          PY
+
+          echo "Localizando Gradle Wrapper..."
+
+          WRAPPER="$(
+            find extracted -type f \
+              -name gradlew \
+              -print -quit || true
+          )"
 
           if [ -z "$WRAPPER" ]; then
-            echo "ERRO: gradlew não encontrado após extração."
+            echo "ERRO: gradlew não foi encontrado."
+            echo "Primeiros arquivos extraídos:"
             find extracted -maxdepth 5 -type f | head -200
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$WRAPPER")"
 
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "ERRO: Arquivo settings.gradle não encontrado."
+            exit 1
+          fi
+
           chmod +x "$PROJECT_DIR/gradlew"
 
-          echo "Projeto encontrado: $PROJECT_DIR"
+          echo "Projeto localizado: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # ==========================================
-      # 7. VALIDAR PROJETO GRADLE
+      # 7. VALIDAR PROJETO
       # ==========================================
 
       - name: Verify Gradle project
@@ -323,27 +311,27 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "Diretório:"
+          echo "Diretório do projeto:"
           pwd
 
+          echo "Conteúdo:"
           ls -la
 
           test -f gradlew
+          test -f gradle/wrapper/gradle-wrapper.properties
 
           if [ ! -f settings.gradle ] && \
              [ ! -f settings.gradle.kts ]; then
-            echo "ERRO: settings.gradle não encontrado."
+            echo "ERRO: Projeto Gradle inválido."
             exit 1
           fi
-
-          test -f gradle/wrapper/gradle-wrapper.properties
 
           chmod +x gradlew
 
           echo "Projeto Gradle validado."
 
       # ==========================================
-      # 8. VERIFICAR AMBIENTE
+      # 8. VALIDAR FERRAMENTAS
       # ==========================================
 
       - name: Verify build environment
@@ -355,13 +343,19 @@ jobs:
 
           cd "$PROJECT_DIR"
 
+          echo "Java:"
           java -version
+
+          echo "Rust:"
           rustc --version
+
+          echo "Cargo NDK:"
           cargo ndk --version
 
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          echo "Android SDK: $ANDROID_SDK_ROOT"
+          echo "Android NDK: $ANDROID_NDK_HOME"
 
+          echo "Gradle:"
           ./gradlew --version
 
       # ==========================================
@@ -393,7 +387,9 @@ jobs:
           export ANDROID_HOME="$ANDROID_SDK_ROOT"
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/25.2.9519653"
 
-          echo "Compilando Zalith Launcher 2..."
+          echo "======================================"
+          echo "COMPILANDO ZALITH LAUNCHER 2"
+          echo "======================================"
 
           ./gradlew \
             --no-daemon \
@@ -412,25 +408,29 @@ jobs:
           set -euo pipefail
 
           mapfile -t APKS < <(
-            find "$PROJECT_DIR" -type f \
+            find "$PROJECT_DIR" \
+              -type f \
               -path '*/build/outputs/apk/*/*.apk' \
-              ! -name '*-androidTest.apk' \
-              | sort
+              ! -name '*-androidTest.apk' |
+              sort
           )
 
           if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "ERRO: Nenhum APK foi gerado."
+            echo "ERRO: Nenhum APK foi encontrado."
+            find "$PROJECT_DIR" -type f -name '*.apk' -print
             exit 1
           fi
 
+          echo "APKs encontrados:"
           printf '%s\n' "${APKS[@]}"
 
           APK="${APKS[0]}"
 
+          echo "APK selecionado: $APK"
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
 
       # ==========================================
-      # 12. UPLOAD APK
+      # 12. ENVIAR APK
       # ==========================================
 
       - name: Upload Debug APK
@@ -442,7 +442,7 @@ jobs:
           retention-days: 14
 
       # ==========================================
-      # 13. RELATÓRIOS
+      # 13. RELATÓRIOS DE COMPILAÇÃO
       # ==========================================
 
       - name: Upload build reports
