@@ -43,7 +43,13 @@ jobs:
             unzip \
             zip \
             python3 \
-            findutils
+            findutils \
+            curl \
+            build-essential \
+            pkg-config \
+            clang \
+            cmake \
+            ninja-build
 
       # ==========================================
       # 3. LOCALIZAR E REUNIR ZIPs
@@ -304,7 +310,86 @@ jobs:
           adb version
 
       # ==========================================
-      # 10. DIAGNOSTICAR LWJGL
+      # 10. INSTALAR RUST E CARGO-NDK
+      # ==========================================
+
+      - name: Instalar Rust e cargo-ndk
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "======================================"
+          echo "INSTALANDO RUST"
+          echo "======================================"
+
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf \
+              https://sh.rustup.rs | sh -s -- -y --profile minimal
+          fi
+
+          source "$HOME/.cargo/env"
+
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+          rustup update stable
+          rustup default stable
+
+          echo "======================================"
+          echo "INSTALANDO TARGETS ANDROID"
+          echo "======================================"
+
+          rustup target add \
+            aarch64-linux-android \
+            armv7-linux-androideabi \
+            i686-linux-android \
+            x86_64-linux-android
+
+          echo "======================================"
+          echo "INSTALANDO CARGO-NDK"
+          echo "======================================"
+
+          cargo install cargo-ndk --locked
+
+          echo "======================================"
+          echo "CONFIGURANDO ANDROID NDK"
+          echo "======================================"
+
+          SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+
+          if [ -z "$SDK_PATH" ]; then
+            echo "::error::ANDROID_HOME e ANDROID_SDK_ROOT não estão definidos."
+            exit 1
+          fi
+
+          NDK_VERSION="25.2.9519653"
+          NDK_PATH="$SDK_PATH/ndk/$NDK_VERSION"
+
+          if [ ! -d "$NDK_PATH" ]; then
+            echo "::error::Android NDK não encontrado: $NDK_PATH"
+            exit 1
+          fi
+
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
+
+          echo "======================================"
+          echo "VERIFICANDO RUST"
+          echo "======================================"
+
+          rustc --version
+          cargo --version
+          cargo ndk --version
+
+          echo "======================================"
+          echo "VERIFICANDO TARGETS"
+          echo "======================================"
+
+          rustup target list --installed
+
+          echo "Rust e cargo-ndk preparados."
+
+      # ==========================================
+      # 11. DIAGNOSTICAR LWJGL
       # ==========================================
 
       - name: Diagnosticar módulos Gradle e LWJGL
@@ -374,7 +459,7 @@ jobs:
           fi
 
       # ==========================================
-      # 11. VERIFICAR GRADLE
+      # 12. VERIFICAR GRADLE
       # ==========================================
 
       - name: Verificar configuração Gradle
@@ -406,7 +491,7 @@ jobs:
             tasks --all
 
       # ==========================================
-      # 12. COMPILAR ZALITH
+      # 13. COMPILAR ZALITH
       # ==========================================
 
       - name: Compilar Zalith Launcher 2
@@ -420,6 +505,24 @@ jobs:
           echo "INICIANDO COMPILAÇÃO"
           echo "======================================"
 
+          echo "Verificando cargo-ndk..."
+
+          command -v cargo
+          command -v rustc
+          command -v cargo-ndk
+
+          cargo ndk --version
+
+          echo "Verificando Android NDK..."
+
+          echo "$ANDROID_NDK_HOME"
+
+          test -d "$ANDROID_NDK_HOME"
+
+          echo "======================================"
+          echo "COMPILANDO APK"
+          echo "======================================"
+
           ./gradlew \
             --no-daemon \
             --stacktrace \
@@ -431,7 +534,7 @@ jobs:
           echo "======================================"
 
       # ==========================================
-      # 13. LOCALIZAR APK
+      # 14. LOCALIZAR APK
       # ==========================================
 
       - name: Localizar e verificar APK
@@ -485,7 +588,7 @@ jobs:
           ls -lh final-apk
 
       # ==========================================
-      # 14. SALVAR APK
+      # 15. SALVAR APK
       # ==========================================
 
       - name: Salvar APK como artefato
@@ -497,7 +600,7 @@ jobs:
           retention-days: 14
 
       # ==========================================
-      # 15. SALVAR DIAGNÓSTICOS
+      # 16. SALVAR DIAGNÓSTICOS
       # ==========================================
 
       - name: Salvar diagnóstico se a compilação falhar
