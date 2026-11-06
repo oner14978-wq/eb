@@ -18,24 +18,40 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      # ==========================================
+      # 1. BAIXAR ARQUIVOS
+      # ==========================================
+
       - name: Baixar arquivos do repositório
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
+
+      # ==========================================
+      # 2. INSTALAR FERRAMENTAS
+      # ==========================================
 
       - name: Instalar ferramentas de arquivos
         shell: bash
         run: |
           set -eux
           sudo apt-get update
-          sudo apt-get install -y unzip zip python3 findutils
+          sudo apt-get install -y \
+            unzip \
+            zip \
+            python3 \
+            findutils
 
-      - name: Localizar e extrair automaticamente todos os ZIPs
+      # ==========================================
+      # 3. EXTRAIR E REUNIR TODOS OS ZIPs
+      # ==========================================
+
+      - name: Extrair e reunir todos os ZIPs do Zalith
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          mkdir -p extracted
+          mkdir -p extracted/merged
           mkdir -p zip_diagnostics
 
           echo "======================================"
@@ -49,8 +65,6 @@ jobs:
               -print0 | sort -z
           )
 
-          echo "Arquivos encontrados: ${#PARTS[@]}"
-
           if [ "${#PARTS[@]}" -eq 0 ]; then
             echo "::error::Nenhum arquivo Zali*.zip foi encontrado."
             echo "Arquivos ZIP disponíveis:"
@@ -58,57 +72,62 @@ jobs:
             exit 1
           fi
 
-          printf '%s\n' "${PARTS[@]}"
+          echo "Total de arquivos: ${#PARTS[@]}"
 
           INDEX=0
 
           for PART in "${PARTS[@]}"; do
             INDEX=$((INDEX + 1))
-            DEST="extracted/part-${INDEX}"
 
             echo ""
             echo "======================================"
-            echo "ARQUIVO ${INDEX}: ${PART}"
+            echo "ARQUIVO ${INDEX}: $PART"
             echo "======================================"
 
-            mkdir -p "$DEST"
+            if ! unzip -t "$PART" \
+              > "zip_diagnostics/part-${INDEX}.txt" 2>&1; then
 
-            if unzip -t "$PART" > "zip_diagnostics/part-${INDEX}.txt" 2>&1; then
-              echo "ZIP válido. Extraindo individualmente..."
-              unzip -oq "$PART" -d "$DEST"
-            else
               echo "::error::ZIP inválido ou incompleto: $PART"
               cat "zip_diagnostics/part-${INDEX}.txt"
               exit 1
             fi
+
+            echo "ZIP válido. Reunindo arquivos..."
+
+            unzip -oq "$PART" -d extracted/merged
+
           done
 
-          echo "Extração concluída."
+          echo "======================================"
+          echo "EXTRAÇÃO CONCLUÍDA"
+          echo "======================================"
 
-          find extracted -maxdepth 6 -type f \
-            \( -name 'gradlew' \
-            -o -name 'settings.gradle' \
-            -o -name 'settings.gradle.kts' \
-            -o -name 'build.gradle' \
-            -o -name 'build.gradle.kts' \) \
+          echo "Arquivos Gradle encontrados:"
+
+          find extracted/merged -maxdepth 7 -type f \
+            \( -name gradlew \
+            -o -name settings.gradle \
+            -o -name settings.gradle.kts \
+            -o -name build.gradle \
+            -o -name build.gradle.kts \) \
             -print | sort
+
+      # ==========================================
+      # 4. LOCALIZAR A RAIZ DO GRADLE
+      # ==========================================
 
       - name: Encontrar a raiz real do projeto
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          echo "Procurando gradlew e configurações Gradle..."
+          ROOT="extracted/merged"
+
+          echo "Procurando a raiz Gradle..."
 
           mapfile -t WRAPPERS < <(
-            find extracted -type f -name gradlew -print | sort
+            find "$ROOT" -type f -name gradlew -print | sort
           )
-
-          if [ "${#WRAPPERS[@]}" -eq 0 ]; then
-            echo "::error::Não foi encontrado gradlew."
-            find extracted -maxdepth 6 -type f | sort | head -n 500
-            exit 1
-          fi
 
           PROJECT_DIR=""
 
@@ -117,28 +136,45 @@ jobs:
 
             if [ -f "$CANDIDATE/settings.gradle" ] || \
                [ -f "$CANDIDATE/settings.gradle.kts" ]; then
+
               PROJECT_DIR="$CANDIDATE"
               break
             fi
           done
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "::error::gradlew encontrado, mas settings.gradle não foi localizado na mesma raiz."
+            echo "::error::Não foi encontrada uma raiz Gradle completa."
+
+            echo "Wrappers encontrados:"
             printf '%s\n' "${WRAPPERS[@]}"
+
+            echo "Estrutura disponível:"
+            find "$ROOT" -maxdepth 7 -type f | sort | head -n 600
+
             exit 1
           fi
 
           if [ ! -f "$PROJECT_DIR/build.gradle" ] && \
              [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
-            echo "::error::O build.gradle principal não foi encontrado."
+
+            echo "::error::Build Gradle principal não encontrado."
             exit 1
           fi
 
-          echo "Projeto encontrado em: $PROJECT_DIR"
+          chmod +x "$PROJECT_DIR/gradlew"
+
+          echo "Raiz do projeto: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          chmod +x "$PROJECT_DIR/gradlew"
-          ls -la "$PROJECT_DIR"
+          echo "======================================"
+          echo "ESTRUTURA DO PROJETO"
+          echo "======================================"
+
+          find "$PROJECT_DIR" -maxdepth 4 -type d | sort
+
+      # ==========================================
+      # 5. VERIFICAR MÓDULO PRINCIPAL
+      # ==========================================
 
       - name: Verificar módulo ZalithLauncher
         shell: bash
@@ -149,18 +185,26 @@ jobs:
 
           if [ ! -d "$PROJECT_DIR/ZalithLauncher" ]; then
             echo "::error::A pasta ZalithLauncher não foi encontrada."
-            find "$PROJECT_DIR" -maxdepth 4 -type d | sort
+
+            find "$PROJECT_DIR" -maxdepth 5 -type d | sort
             exit 1
           fi
 
           if [ ! -d "$PROJECT_DIR/ZalithLauncher/src" ]; then
             echo "::error::A pasta ZalithLauncher/src não foi encontrada."
-            find "$PROJECT_DIR/ZalithLauncher" -maxdepth 5 -type f | sort | head -n 300
+
+            find "$PROJECT_DIR/ZalithLauncher" -maxdepth 6 -type f | sort
             exit 1
           fi
 
           echo "Módulo principal encontrado."
-          find "$PROJECT_DIR/ZalithLauncher/src" -maxdepth 3 -type f | head -n 100
+
+          find "$PROJECT_DIR/ZalithLauncher/src" \
+            -maxdepth 4 -type f | head -n 150
+
+      # ==========================================
+      # 6. CONFIGURAR JAVA
+      # ==========================================
 
       - name: Configurar Java
         uses: actions/setup-java@v6
@@ -169,8 +213,16 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      # ==========================================
+      # 7. CONFIGURAR ANDROID SDK
+      # ==========================================
+
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v4
+
+      # ==========================================
+      # 8. ACEITAR LICENÇAS E INSTALAR SDK
+      # ==========================================
 
       - name: Instalar ferramentas Android
         shell: bash
@@ -178,7 +230,7 @@ jobs:
           set -Eeuo pipefail
 
           echo "======================================"
-          echo "ACEITANDO LICENÇAS DO ANDROID SDK"
+          echo "ACEITANDO LICENÇAS ANDROID"
           echo "======================================"
 
           set +o pipefail
@@ -187,14 +239,14 @@ jobs:
           set -o pipefail
 
           if [ "$SDK_STATUS" -ne 0 ]; then
-            echo "::error::Falha ao aceitar as licenças do Android SDK."
+            echo "::error::Falha ao aceitar licenças Android."
             exit "$SDK_STATUS"
           fi
 
           echo "Licenças aceitas."
 
           echo "======================================"
-          echo "INSTALANDO COMPONENTES ANDROID"
+          echo "INSTALANDO COMPONENTES"
           echo "======================================"
 
           sdkmanager --install \
@@ -203,9 +255,52 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;25.2.9519653"
 
+          echo "Android SDK configurado."
+
+      # ==========================================
+      # 9. VERIFICAR ESTRUTURA LWJGL
+      # ==========================================
+
+      - name: Diagnosticar módulos Gradle e LWJGL
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          cd "$PROJECT_DIR"
+
           echo "======================================"
-          echo "ANDROID SDK CONFIGURADO"
+          echo "VERIFICANDO LWJGL"
           echo "======================================"
+
+          if [ -d "LWJGL" ]; then
+            find LWJGL -maxdepth 5 -type d | sort
+            find LWJGL -maxdepth 5 -type f | sort | head -n 300
+          else
+            echo "::warning::Pasta LWJGL não encontrada na raiz."
+          fi
+
+          echo "======================================"
+          echo "VERIFICANDO DIRETÓRIOS CONFIGURADOS"
+          echo "======================================"
+
+          if [ -f settings.gradle.kts ]; then
+            grep -n -E 'LWJGL|patches|include|projectDir' \
+              settings.gradle.kts || true
+          elif [ -f settings.gradle ]; then
+            grep -n -E 'LWJGL|patches|include|projectDir' \
+              settings.gradle || true
+          fi
+
+          if [ -d "LWJGL/patches" ]; then
+            echo "Diretório LWJGL/patches encontrado."
+          else
+            echo "::warning::LWJGL/patches continua ausente."
+            echo "Não será criada uma pasta vazia para mascarar a ausência."
+          fi
+
+      # ==========================================
+      # 10. VERIFICAR GRADLE
+      # ==========================================
 
       - name: Verificar configuração Gradle
         shell: bash
@@ -214,14 +309,30 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "Versão do Java:"
+          echo "======================================"
+          echo "VERSÃO DO JAVA"
+          echo "======================================"
+
           java -version
 
-          echo "Versão do Gradle:"
+          echo "======================================"
+          echo "VERSÃO DO GRADLE"
+          echo "======================================"
+
           ./gradlew --version
 
-          echo "Tarefas Gradle disponíveis:"
-          ./gradlew --no-daemon tasks --all
+          echo "======================================"
+          echo "VERIFICANDO TAREFAS GRADLE"
+          echo "======================================"
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            tasks --all
+
+      # ==========================================
+      # 11. COMPILAR APK
+      # ==========================================
 
       - name: Compilar Zalith Launcher 2
         shell: bash
@@ -230,11 +341,19 @@ jobs:
 
           cd "$PROJECT_DIR"
 
+          echo "======================================"
+          echo "COMPILANDO ZALITH LAUNCHER 2"
+          echo "======================================"
+
           ./gradlew \
             --no-daemon \
             --stacktrace \
             --warning-mode all \
             :ZalithLauncher:assembleDebug
+
+      # ==========================================
+      # 12. LOCALIZAR APK
+      # ==========================================
 
       - name: Localizar e verificar APK
         shell: bash
@@ -251,7 +370,10 @@ jobs:
 
           if [ "${#APKS[@]}" -eq 0 ]; then
             echo "::error::Nenhum APK foi gerado."
-            find "$PROJECT_DIR" -type d -path '*/build/outputs/*' -print
+
+            find "$PROJECT_DIR" \
+              -type d -path '*/build/outputs/*' -print
+
             exit 1
           fi
 
@@ -259,12 +381,21 @@ jobs:
 
           for APK in "${APKS[@]}"; do
             echo "APK encontrado: $APK"
+
             ls -lh "$APK"
+
             cp "$APK" "final-apk/$(basename "$APK")"
           done
 
-          echo "APKs disponíveis:"
+          echo "======================================"
+          echo "APKs GERADOS"
+          echo "======================================"
+
           ls -lh final-apk
+
+      # ==========================================
+      # 13. SALVAR APK
+      # ==========================================
 
       - name: Salvar APK como artefato
         uses: actions/upload-artifact@v6
@@ -273,6 +404,10 @@ jobs:
           path: final-apk/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      # ==========================================
+      # 14. SALVAR DIAGNÓSTICOS
+      # ==========================================
 
       - name: Salvar diagnóstico se a compilação falhar
         if: failure()
