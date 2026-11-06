@@ -19,14 +19,14 @@ jobs:
 
     steps:
       # ==========================================
-      # 1. BAIXAR O REPOSITÓRIO
+      # 1. CHECKOUT
       # ==========================================
 
       - name: Checkout repository
         uses: actions/checkout@v7
 
       # ==========================================
-      # 2. INSTALAR JAVA 21
+      # 2. JAVA 21
       # ==========================================
 
       - name: Install Java 21
@@ -42,7 +42,7 @@ jobs:
           javac -version
 
       # ==========================================
-      # 3. INSTALAR ANDROID SDK
+      # 3. ANDROID SDK
       # ==========================================
 
       - name: Install Android SDK
@@ -55,19 +55,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Android SDK: $ANDROID_SDK_ROOT"
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 
-          sdkmanager --install \
+          echo "Android SDK: $SDK"
+
+          sdkmanager --sdk_root="$SDK" --install \
             "platform-tools" \
-            "platforms;android-37" \
+            "platforms;android-37.2" \
             "build-tools;37.0.0" \
             "ndk;25.2.9519653"
 
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> "$GITHUB_ENV"
+          echo "Verificando instalação..."
+
+          test -d "$SDK/platforms/android-37.2"
+          test -d "$SDK/build-tools/37.0.0"
+          test -d "$SDK/ndk/25.2.9519653"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/25.2.9519653" >> "$GITHUB_ENV"
+
+          echo "SDK instalado corretamente."
 
       # ==========================================
-      # 4. INSTALAR RUST
+      # 4. RUST
       # ==========================================
 
       - name: Install Rust
@@ -107,7 +118,7 @@ jobs:
           cargo ndk --version
 
       # ==========================================
-      # 5. VERIFICAR ARQUIVOS
+      # 5. MOSTRAR ARQUIVOS
       # ==========================================
 
       - name: Show repository files
@@ -115,15 +126,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Arquivos disponíveis:"
           find . -maxdepth 5 -type f \
             -not -path './.git/*' | sort
 
       # ==========================================
-      # 6. IDENTIFICAR OU RECONSTRUIR O PROJETO
+      # 6. RECONSTRUIR ZIP
       # ==========================================
 
-      - name: Reconstruct project from 01.zip 02.zip 03.zip
+      - name: Reconstruct project from ZIP parts
         shell: bash
         run: |
           set -euo pipefail
@@ -142,7 +152,7 @@ jobs:
             exit 0
           fi
 
-          echo "Procurando as partes 01.zip, 02.zip e 03.zip..."
+          echo "Procurando 01.zip, 02.zip e 03.zip..."
 
           mkdir -p /tmp/zalith-parts
 
@@ -150,7 +160,6 @@ jobs:
           : > "$ARCHIVE"
 
           for PART in 01 02 03; do
-
             FILE=""
 
             for CANDIDATE in "$PART.zip" "$PART"; do
@@ -162,15 +171,13 @@ jobs:
               )
 
               if [ "${#MATCHES[@]}" -gt 0 ]; then
-
                 if [ "${#MATCHES[@]}" -ne 1 ] || [ -n "$FILE" ]; then
-                  echo "ERRO: Arquivo $PART duplicado."
+                  echo "ERRO: Parte $PART duplicada."
                   exit 1
                 fi
 
                 FILE="${MATCHES[0]}"
               fi
-
             done
 
             if [ -z "$FILE" ]; then
@@ -178,25 +185,17 @@ jobs:
               exit 1
             fi
 
-            echo "Reconstruindo com: $FILE"
+            echo "Adicionando: $FILE"
             cat "$FILE" >> "$ARCHIVE"
-
           done
 
-          # Verificar integridade antes da extração
-          echo "Verificando arquivo reconstruído..."
+          echo "Verificando integridade do ZIP..."
 
-          if ! unzip -t "$ARCHIVE"; then
-            echo "ERRO: As três partes não formam um ZIP válido."
-            echo "Confirme que são fragmentos binários sequenciais."
-            exit 1
-          fi
+          unzip -t "$ARCHIVE"
 
-          # Extrair projeto
           mkdir -p extracted
           unzip -q "$ARCHIVE" -d extracted
 
-          # Encontrar Gradle Wrapper
           WRAPPER="$(find extracted -type f \
             -name gradlew -print -quit || true)"
 
@@ -210,11 +209,11 @@ jobs:
 
           chmod +x "$PROJECT_DIR/gradlew"
 
-          echo "Projeto localizado: $PROJECT_DIR"
+          echo "Projeto: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # ==========================================
-      # 7. VALIDAR PROJETO GRADLE
+      # 7. VERIFICAR PROJETO
       # ==========================================
 
       - name: Verify Gradle project
@@ -224,33 +223,25 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "Diretório:"
           pwd
-
           ls -la
 
-          if [ ! -f gradlew ]; then
-            echo "ERRO: gradlew não encontrado."
-            exit 1
-          fi
+          test -f gradlew
 
           if [ ! -f settings.gradle ] && \
              [ ! -f settings.gradle.kts ]; then
-            echo "ERRO: settings.gradle não encontrado."
+            echo "ERRO: settings.gradle ausente."
             exit 1
           fi
 
-          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
-            echo "ERRO: gradle-wrapper.properties não encontrado."
-            exit 1
-          fi
+          test -f gradle/wrapper/gradle-wrapper.properties
 
           chmod +x gradlew
 
           echo "Projeto Gradle validado."
 
       # ==========================================
-      # 8. VERIFICAR RUST E GRADLE
+      # 8. VERIFICAR AMBIENTE
       # ==========================================
 
       - name: Verify build environment
@@ -262,15 +253,29 @@ jobs:
 
           cd "$PROJECT_DIR"
 
+          echo "Java:"
           java -version
+
+          echo "Rust:"
           rustc --version
-          cargo --version
+
+          echo "Cargo NDK:"
           cargo ndk --version
 
+          echo "Android SDK:"
+          echo "$ANDROID_HOME"
+
+          echo "Android NDK:"
+          echo "$ANDROID_NDK_HOME"
+
+          echo "Android platform:"
+          ls -la "$ANDROID_HOME/platforms/"
+
+          echo "Gradle:"
           ./gradlew --version
 
       # ==========================================
-      # 9. LISTAR TAREFAS GRADLE
+      # 9. LISTAR TAREFAS
       # ==========================================
 
       - name: List Gradle tasks
@@ -298,7 +303,7 @@ jobs:
           export ANDROID_HOME="$ANDROID_SDK_ROOT"
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/25.2.9519653"
 
-          echo "Iniciando compilação do Zalith Launcher 2..."
+          echo "Iniciando compilação..."
 
           ./gradlew \
             --no-daemon \
@@ -324,7 +329,7 @@ jobs:
           )
 
           if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "ERRO: APK não foi gerado."
+            echo "ERRO: Nenhum APK foi gerado."
             exit 1
           fi
 
@@ -333,7 +338,6 @@ jobs:
 
           APK="${APKS[0]}"
 
-          echo "APK_PATH=$APK"
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
 
       # ==========================================
@@ -349,7 +353,7 @@ jobs:
           retention-days: 14
 
       # ==========================================
-      # 13. ENVIAR RELATÓRIOS
+      # 13. RELATÓRIOS
       # ==========================================
 
       - name: Upload build reports
