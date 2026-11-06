@@ -13,526 +13,258 @@ permissions:
 
 jobs:
   build:
-    name: Reconstruct and Build Zalith Launcher 2
+    name: Montar projeto e compilar APK
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
     steps:
-      # ==========================================
-      # 1. CHECKOUT
-      # ==========================================
-
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      # ==========================================
-      # 2. JAVA 21
-      # ==========================================
-
-      - name: Install Java 21
-        uses: actions/setup-java@v5
+      - name: Baixar arquivos do repositório
+        uses: actions/checkout@v4
         with:
-          distribution: temurin
-          java-version: '21'
+          fetch-depth: 1
 
-      - name: Verify Java
+      - name: Instalar ferramentas de arquivos
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip python3 findutils
+
+      - name: Localizar e extrair automaticamente todos os ZIPs
         shell: bash
         run: |
-          set -euo pipefail
-          java -version
-          javac -version
+          set -Eeuo pipefail
 
-      # ==========================================
-      # 3. ANDROID SDK
-      # ==========================================
+          mkdir -p extracted
+          mkdir -p zip_diagnostics
 
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: 'true'
+          echo "======================================"
+          echo "PROCURANDO ARQUIVOS ZALI*.ZIP"
+          echo "======================================"
 
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -euo pipefail
+          mapfile -d '' PARTS < <(
+            find . -maxdepth 5 -type f \
+              -iname 'Zali*.zip' \
+              -not -path './.git/*' \
+              -print0 | sort -z
+          )
 
-          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "Arquivos encontrados: ${#PARTS[@]}"
 
-          echo "Android SDK: $SDK"
-
-          sdkmanager --list > /tmp/sdk-list.txt
-
-          echo "Plataformas Android 37 disponíveis:"
-          grep -E 'platforms;android-37' /tmp/sdk-list.txt || true
-
-          PLATFORM_PACKAGE="$(
-            grep -oE 'platforms;android-37[^[:space:]]*' \
-              /tmp/sdk-list.txt |
-            sort -u |
-            head -n 1 || true
-          )"
-
-          if [ -z "$PLATFORM_PACKAGE" ]; then
-            echo "ERRO: Plataforma Android 37 não encontrada."
-            grep -E 'platforms;android-' /tmp/sdk-list.txt || true
+          if [ "${#PARTS[@]}" -eq 0 ]; then
+            echo "::error::Nenhum arquivo Zali*.zip foi encontrado no repositório."
+            echo "Arquivos ZIP disponíveis:"
+            find . -type f -iname '*.zip' -print
             exit 1
           fi
 
-          echo "Instalando plataforma: $PLATFORM_PACKAGE"
+          printf '%s\n' "${PARTS[@]}"
 
-          sdkmanager --install \
-            "platform-tools" \
-            "$PLATFORM_PACKAGE" \
-            "ndk;25.2.9519653"
+          INDEX=0
 
-          test -d "$SDK/ndk/25.2.9519653"
+          for PART in "${PARTS[@]}"; do
+            INDEX=$((INDEX + 1))
+            DEST="extracted/part-${INDEX}"
 
-          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$SDK/ndk/25.2.9519653" >> "$GITHUB_ENV"
+            echo ""
+            echo "======================================"
+            echo "ARQUIVO ${INDEX}: ${PART}"
+            echo "======================================"
 
-      # ==========================================
-      # 4. RUST
-      # ==========================================
+            mkdir -p "$DEST"
 
-      - name: Install Rust
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if ! command -v rustup >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf \
-              https://sh.rustup.rs | sh -s -- -y
-          fi
-
-          source "$HOME/.cargo/env"
-
-          rustup toolchain install stable
-          rustup default stable
-
-          rustup target add \
-            aarch64-linux-android \
-            armv7-linux-androideabi \
-            x86_64-linux-android \
-            i686-linux-android
-
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Install cargo-ndk
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          source "$HOME/.cargo/env"
-
-          if ! command -v cargo-ndk >/dev/null 2>&1; then
-            cargo install cargo-ndk
-          fi
-
-          cargo ndk --version
-
-      # ==========================================
-      # 5. DIAGNÓSTICO DOS ARQUIVOS
-      # ==========================================
-
-      - name: Diagnose repository files
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "======================================"
-          echo "ARQUIVOS DO REPOSITÓRIO"
-          echo "======================================"
-
-          find . -type f \
-            -not -path './.git/*' \
-            -printf '%p (%s bytes)\n' |
-            sort
-
-          echo "======================================"
-          echo "PARTES DO ZALITH"
-          echo "======================================"
-
-          for FILE in \
-            "./Zalith-01.zip" \
-            "./Zalith-02.zip" \
-            "./Zali-03.zip"
-          do
-            if [ -f "$FILE" ]; then
-              ls -lh "$FILE"
-              file "$FILE"
+            if unzip -t "$PART" > "zip_diagnostics/part-${INDEX}.txt" 2>&1; then
+              echo "ZIP válido. Extraindo individualmente..."
+              unzip -oq "$PART" -d "$DEST"
             else
-              echo "AUSENTE: $FILE"
-            fi
-          done
-
-      # ==========================================
-      # 6. EXTRAÇÃO INTELIGENTE DAS PARTES
-      # ==========================================
-
-      - name: Reconstruct and extract project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PARTS=(
-            "./Zalith-01.zip"
-            "./Zalith-02.zip"
-            "./Zali-03.zip"
-          )
-
-          echo "Procurando Gradle Wrapper..."
-
-          WRAPPER="$(
-            find . -type f \
-              -name gradlew \
-              -not -path './.git/*' \
-              -print -quit || true
-          )"
-
-          if [ -n "$WRAPPER" ]; then
-            PROJECT_DIR="$(dirname "$WRAPPER")"
-            echo "Projeto já existe: $PROJECT_DIR"
-            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          echo "Gradle Wrapper não encontrado."
-          echo "Verificando as partes..."
-
-          for FILE in "${PARTS[@]}"; do
-            if [ ! -s "$FILE" ]; then
-              echo "ERRO: Arquivo ausente ou vazio: $FILE"
+              echo "::error::O arquivo não é um ZIP independente válido: $PART"
+              cat "zip_diagnostics/part-${INDEX}.txt"
               exit 1
             fi
           done
 
-          rm -rf extracted
-          mkdir -p extracted
-
-          export PART1="${PARTS[0]}"
-          export PART2="${PARTS[1]}"
-          export PART3="${PARTS[2]}"
-
-          python3 <<'PY'
-          import os
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          parts = [
-              Path(os.environ["PART1"]),
-              Path(os.environ["PART2"]),
-              Path(os.environ["PART3"]),
-          ]
-
-          destination = Path("extracted").resolve()
-          destination.mkdir(parents=True, exist_ok=True)
-
-          independent = True
-
-          print("======================================")
-          print("ANALISANDO CADA PARTE")
-          print("======================================")
-
-          for part in parts:
-              print(f"\nArquivo: {part}")
-              print(f"Tamanho: {part.stat().st_size} bytes")
-
-              try:
-                  with zipfile.ZipFile(part, "r") as archive:
-                      entries = archive.infolist()
-
-                      if not entries:
-                          independent = False
-                          print("ZIP sem arquivos.")
-                          continue
-
-                      damaged = archive.testzip()
-
-                      if damaged:
-                          raise RuntimeError(
-                              f"Arquivo danificado: {damaged}"
-                          )
-
-                      print(f"ZIP independente válido: {len(entries)} entradas")
-
-                      for entry in entries[:40]:
-                          print("  " + entry.filename)
-
-              except zipfile.BadZipFile:
-                  independent = False
-                  print("Não é um ZIP independente.")
-
-          def safe_extract(archive, target):
-              root = target.resolve()
-
-              for entry in archive.infolist():
-                  output = (root / entry.filename).resolve()
-
-                  if output != root and root not in output.parents:
-                      raise RuntimeError(
-                          "Caminho inseguro no ZIP: " + entry.filename
-                      )
-
-              archive.extractall(root)
-
-          if independent:
-              print("\n======================================")
-              print("MODO: EXTRAINDO ZIPs SEPARADAMENTE")
-              print("======================================")
-
-              for part in parts:
-                  print(f"\nExtraindo {part}...")
-
-                  with zipfile.ZipFile(part, "r") as archive:
-                      safe_extract(archive, destination)
-
-          else:
-              print("\n======================================")
-              print("MODO: RECONSTRUINDO FRAGMENTOS")
-              print("======================================")
-
-              combined = Path(
-                  "/tmp/ZalithLauncher2-combined.zip"
-              )
-
-              with combined.open("wb") as output:
-                  for part in parts:
-                      print("Adicionando:", part)
-
-                      with part.open("rb") as source:
-                          while True:
-                              block = source.read(1024 * 1024)
-
-                              if not block:
-                                  break
-
-                              output.write(block)
-
-              print("Arquivo reconstruído:", combined)
-              print("Tamanho:", combined.stat().st_size)
-
-              with zipfile.ZipFile(combined, "r") as archive:
-                  damaged = archive.testzip()
-
-                  if damaged:
-                      raise RuntimeError(
-                          "ZIP reconstruído danificado: " + damaged
-                      )
-
-                  print("Entradas encontradas:", len(archive.infolist()))
-                  safe_extract(archive, destination)
-
-          print("\nExtração concluída.")
-          PY
-
-          # ======================================
-          # PROCURAR PROJETO GRADLE
-          # ======================================
-
+          echo ""
           echo "======================================"
-          echo "PROCURANDO PROJETO GRADLE"
+          echo "ARQUIVOS EXTRAÍDOS"
           echo "======================================"
 
-          find extracted -type f \
-            \( -name gradlew \
-            -o -name settings.gradle \
-            -o -name settings.gradle.kts \
-            -o -name gradle-wrapper.properties \) \
-            -print
+          find extracted -maxdepth 5 -type f \
+            \( -name 'gradlew' \
+            -o -name 'settings.gradle' \
+            -o -name 'settings.gradle.kts' \
+            -o -name 'build.gradle' \
+            -o -name 'build.gradle.kts' \) \
+            -print | sort
 
-          WRAPPER="$(
-            find extracted -type f \
-              -name gradlew \
-              -print -quit || true
-          )"
+      - name: Encontrar a raiz real do projeto
+        shell: bash
+        run: |
+          set -Eeuo pipefail
 
-          if [ -z "$WRAPPER" ]; then
-            echo "ERRO: gradlew não encontrado."
+          echo "Procurando gradlew e configurações Gradle..."
 
-            echo "Estrutura extraída:"
-            find extracted -maxdepth 8 -type f -print | sort
+          mapfile -t WRAPPERS < <(
+            find extracted -type f -name gradlew -print | sort
+          )
 
-            echo "Pastas extraídas:"
-            find extracted -maxdepth 5 -type d -print | sort
-
-            echo "Arquivos de configuração Gradle:"
-            find extracted -type f \
-              \( -name '*.gradle' \
-              -o -name '*.gradle.kts' \
-              -o -name 'gradle-wrapper.properties' \) \
-              -print
-
+          if [ "${#WRAPPERS[@]}" -eq 0 ]; then
+            echo "::error::Não foi encontrado gradlew nos arquivos extraídos."
+            echo "Estrutura encontrada:"
+            find extracted -maxdepth 5 -type f | sort | head -n 500
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$WRAPPER")"
+          PROJECT_DIR=""
 
-          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "ERRO: settings.gradle não encontrado."
+          for WRAPPER in "${WRAPPERS[@]}"; do
+            CANDIDATE="$(dirname "$WRAPPER")"
+
+            if [ -f "$CANDIDATE/settings.gradle" ] || \
+               [ -f "$CANDIDATE/settings.gradle.kts" ]; then
+              PROJECT_DIR="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "::error::Foi encontrado gradlew, mas não settings.gradle ou settings.gradle.kts na mesma raiz."
+            printf '%s\n' "${WRAPPERS[@]}"
             exit 1
           fi
 
-          chmod +x "$WRAPPER"
+          if [ ! -f "$PROJECT_DIR/build.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
+            echo "::error::O build.gradle principal não foi encontrado."
+            exit 1
+          fi
 
-          echo "Projeto encontrado: $PROJECT_DIR"
+          echo "Projeto encontrado em: $PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      # ==========================================
-      # 7. VALIDAR PROJETO GRADLE
-      # ==========================================
+          chmod +x "$PROJECT_DIR/gradlew"
 
-      - name: Verify Gradle project
+          echo "Estrutura principal:"
+          ls -la "$PROJECT_DIR"
+
+      - name: Verificar módulo ZalithLauncher
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
-          cd "$PROJECT_DIR"
+          echo "Verificando módulo principal..."
 
-          echo "Diretório do projeto:"
-          pwd
-
-          echo "Arquivos:"
-          ls -la
-
-          test -f gradlew
-          test -f gradle/wrapper/gradle-wrapper.properties
-
-          if [ ! -f settings.gradle ] && \
-             [ ! -f settings.gradle.kts ]; then
-            echo "ERRO: Projeto Gradle inválido."
+          if [ ! -d "$PROJECT_DIR/ZalithLauncher" ]; then
+            echo "::error::A pasta ZalithLauncher não foi encontrada."
+            find "$PROJECT_DIR" -maxdepth 3 -type d | sort
             exit 1
           fi
 
-          chmod +x gradlew
+          if [ ! -d "$PROJECT_DIR/ZalithLauncher/src" ]; then
+            echo "::error::A pasta ZalithLauncher/src não foi encontrada. O código-fonte principal ainda está incompleto."
+            find "$PROJECT_DIR/ZalithLauncher" -maxdepth 4 -type f | sort | head -n 300
+            exit 1
+          fi
 
-          echo "Projeto Gradle validado."
+          echo "Módulo principal encontrado."
+          find "$PROJECT_DIR/ZalithLauncher/src" -maxdepth 3 -type f | head -n 100
 
-      # ==========================================
-      # 8. VERIFICAR FERRAMENTAS
-      # ==========================================
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
 
-      - name: Verify build environment
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar ferramentas Android
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
-          source "$HOME/.cargo/env"
+          yes | sdkmanager --licenses
+
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;25.2.9519653"
+
+      - name: Verificar configuração Gradle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
 
           cd "$PROJECT_DIR"
 
-          echo "Java:"
-          java -version
-
-          echo "Rust:"
-          rustc --version
-
-          echo "Cargo NDK:"
-          cargo ndk --version
-
-          echo "Android SDK: $ANDROID_SDK_ROOT"
-          echo "Android NDK: $ANDROID_NDK_HOME"
-
-          echo "Gradle:"
           ./gradlew --version
 
-      # ==========================================
-      # 9. LISTAR TAREFAS GRADLE
-      # ==========================================
+          echo "======================================"
+          echo "TAREFAS DE COMPILAÇÃO DISPONÍVEIS"
+          echo "======================================"
 
-      - name: List Gradle tasks
+          ./gradlew --no-daemon tasks --all
+
+      - name: Compilar Zalith Launcher 2
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
           cd "$PROJECT_DIR"
-
-          ./gradlew --no-daemon tasks
-
-      # ==========================================
-      # 10. COMPILAR APK
-      # ==========================================
-
-      - name: Build Debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          source "$HOME/.cargo/env"
-
-          cd "$PROJECT_DIR"
-
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/25.2.9519653"
-
-          echo "======================================"
-          echo "COMPILANDO ZALITH LAUNCHER 2"
-          echo "======================================"
 
           ./gradlew \
             --no-daemon \
             --stacktrace \
             --warning-mode all \
-            assembleDebug
+            :ZalithLauncher:assembleDebug
 
-      # ==========================================
-      # 11. LOCALIZAR APK
-      # ==========================================
-
-      - name: Locate generated APK
-        id: apk
+      - name: Localizar e verificar APK
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+
+          echo "Procurando APK gerado..."
 
           mapfile -t APKS < <(
-            find "$PROJECT_DIR" \
-              -type f \
+            find "$PROJECT_DIR" -type f \
               -path '*/build/outputs/apk/*/*.apk' \
-              ! -name '*-androidTest.apk' |
-            sort
+              -print | sort
           )
 
           if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "ERRO: Nenhum APK encontrado."
-            find "$PROJECT_DIR" -type f -name '*.apk' -print
+            echo "::error::A compilação terminou sem gerar APK."
+            find "$PROJECT_DIR" -type d -path '*/build/outputs/*' -print
             exit 1
           fi
 
-          echo "APKs encontrados:"
-          printf '%s\n' "${APKS[@]}"
+          mkdir -p final-apk
 
-          APK="${APKS[0]}"
+          for APK in "${APKS[@]}"; do
+            echo "APK encontrado: $APK"
+            ls -lh "$APK"
+            cp "$APK" "final-apk/$(basename "$(dirname "$(dirname "$APK")")")-$(basename "$APK")"
+          done
 
-          echo "APK selecionado: $APK"
-          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          echo "APKs disponíveis:"
+          ls -lh final-apk
 
-      # ==========================================
-      # 12. PUBLICAR APK
-      # ==========================================
-
-      - name: Upload Debug APK
-        uses: actions/upload-artifact@v7
+      - name: Salvar APK como artefato
+        uses: actions/upload-artifact@v4
         with:
-          name: ZalithLauncher2-Debug-APK
-          path: ${{ steps.apk.outputs.apk_path }}
+          name: Zalith-Launcher-2-APK-Debug
+          path: final-apk/*.apk
           if-no-files-found: error
           retention-days: 14
 
-      # ==========================================
-      # 13. RELATÓRIOS
-      # ==========================================
-
-      - name: Upload build reports
-        if: always()
-        uses: actions/upload-artifact@v7
+      - name: Salvar diagnóstico se a compilação falhar
+        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          name: ZalithLauncher2-Build-Reports
+          name: Zalith-Build-Diagnostics
           path: |
-            **/build/reports/**
-            **/build/test-results/**
+            zip_diagnostics/
+            extracted/
           if-no-files-found: ignore
           retention-days: 7
           
