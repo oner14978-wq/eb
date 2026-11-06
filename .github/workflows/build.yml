@@ -24,6 +24,7 @@ jobs:
           fetch-depth: 1
 
       - name: Instalar ferramentas de arquivos
+        shell: bash
         run: |
           set -eux
           sudo apt-get update
@@ -137,7 +138,6 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
           chmod +x "$PROJECT_DIR/gradlew"
-
           ls -la "$PROJECT_DIR"
 
       - name: Verificar módulo ZalithLauncher
@@ -177,13 +177,35 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          echo "======================================"
+          echo "ACEITANDO LICENÇAS DO ANDROID SDK"
+          echo "======================================"
+
+          set +o pipefail
           yes | sdkmanager --licenses
+          SDK_STATUS=${PIPESTATUS[1]}
+          set -o pipefail
+
+          if [ "$SDK_STATUS" -ne 0 ]; then
+            echo "::error::Falha ao aceitar as licenças do Android SDK."
+            exit "$SDK_STATUS"
+          fi
+
+          echo "Licenças aceitas."
+
+          echo "======================================"
+          echo "INSTALANDO COMPONENTES ANDROID"
+          echo "======================================"
 
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;25.2.9519653"
+
+          echo "======================================"
+          echo "ANDROID SDK CONFIGURADO"
+          echo "======================================"
 
       - name: Verificar configuração Gradle
         shell: bash
