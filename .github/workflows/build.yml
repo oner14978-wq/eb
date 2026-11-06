@@ -60,7 +60,6 @@ jobs:
           printf '%s\n' "${ZIP_FILES[@]}"
 
           for ZIP_FILE in "${ZIP_FILES[@]}"; do
-            echo ""
             echo "Verificando: $ZIP_FILE"
 
             if ! unzip -t "$ZIP_FILE"; then
@@ -123,7 +122,7 @@ jobs:
           echo "Código-fonte encontrado."
           ls -la "$PROJECT_ROOT/ZalithLauncher/src/main"
 
-      # 6. Configurar Java
+      # 6. Configurar Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v6
         with:
@@ -135,7 +134,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      # 8. Aceitar licenças
+      # 8. Aceitar licenças Android
       - name: Accept Android SDK licenses
         shell: bash
         run: |
@@ -155,7 +154,10 @@ jobs:
 
       # 9. Instalar plataformas, ferramentas e NDK
       - name: Install Android SDK components
+        shell: bash
         run: |
+          set -euo pipefail
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -187,30 +189,37 @@ jobs:
             i686-linux-android \
             x86_64-linux-android
 
-          if ! command -v cargo-ndk >/dev/null 2>&1; then
+          # cargo-ndk deve ser chamado como "cargo ndk"
+          if ! cargo ndk --version >/dev/null 2>&1; then
             cargo install cargo-ndk --locked
           fi
 
           SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 
           if [ -z "$SDK_PATH" ]; then
-            echo "Android SDK não encontrado."
+            echo "ERRO: Android SDK não encontrado."
             exit 1
           fi
 
           NDK_PATH="$SDK_PATH/ndk/25.2.9519653"
 
           if [ ! -d "$NDK_PATH" ]; then
-            echo "NDK não encontrado: $NDK_PATH"
+            echo "ERRO: NDK não encontrado: $NDK_PATH"
             exit 1
           fi
 
           echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
 
+          echo "Verificando Rust:"
           rustc --version
           cargo --version
-          cargo-ndk --version
+
+          echo "Verificando cargo-ndk:"
+          cargo ndk --version
+
+          echo "NDK encontrado:"
+          echo "$NDK_PATH"
 
       # 11. Corrigir imports e API experimental do Kotlin
       - name: Fix Kotlin Compose compilation issues
@@ -223,7 +232,10 @@ jobs:
           import re
           import sys
 
-          root = Path("extracted/merged/ZalithLauncher/src/main/java/com/movtery/zalithlauncher/ui/screens/content/home")
+          root = Path(
+              "extracted/merged/ZalithLauncher/src/main/java/"
+              "com/movtery/zalithlauncher/ui/screens/content/home"
+          )
 
           dashboard = root / "HomeDashboard.kt"
           hero = root / "HomeHeroBanner.kt"
@@ -233,17 +245,22 @@ jobs:
                   print(f"ERRO: Arquivo não encontrado: {file}")
                   sys.exit(1)
 
-          # HomeDashboard.kt:
-          # Adiciona o import de weight somente se ainda não existir.
+          # Verificar import de weight
           source = dashboard.read_text(encoding="utf-8")
 
-          weight_import = "import androidx.compose.foundation.layout.weight"
+          weight_import = (
+              "import androidx.compose.foundation.layout.weight"
+          )
 
           if weight_import not in source:
-              package_match = re.search(r"^package\s+[^\n]+\n", source, re.MULTILINE)
+              package_match = re.search(
+                  r"^package\s+[^\n]+\n",
+                  source,
+                  re.MULTILINE
+              )
 
               if not package_match:
-                  print("ERRO: Declaração package não encontrada em HomeDashboard.kt.")
+                  print("ERRO: package não encontrado em HomeDashboard.kt.")
                   sys.exit(1)
 
               source = (
@@ -255,12 +272,11 @@ jobs:
               )
 
               dashboard.write_text(source, encoding="utf-8")
-              print("Import weight adicionado em HomeDashboard.kt.")
+              print("Import weight adicionado.")
           else:
               print("Import weight já existe.")
 
-          # HomeHeroBanner.kt:
-          # Autoriza a API experimental do Material 3 no arquivo.
+          # Autorizar API experimental do Material 3
           source = hero.read_text(encoding="utf-8")
 
           optin = (
@@ -270,34 +286,24 @@ jobs:
           )
 
           if optin not in source:
-              package_match = re.search(r"^package\s+[^\n]+\n", source, re.MULTILINE)
-
-              if not package_match:
-                  print("ERRO: Declaração package não encontrada em HomeHeroBanner.kt.")
-                  sys.exit(1)
-
-              source = (
-                  optin
-                  + "\n\n"
-                  + source
-              )
-
+              source = optin + "\n\n" + source
               hero.write_text(source, encoding="utf-8")
-              print("OptIn Material 3 adicionado em HomeHeroBanner.kt.")
+              print("OptIn Material 3 adicionado.")
           else:
               print("OptIn Material 3 já existe.")
 
-          print("Verificação das alterações concluída.")
+          print("Verificação Kotlin concluída.")
           PY
 
-          echo "Verificando alterações:"
+          echo "Import weight:"
           grep -n "foundation.layout.weight" \
             "$PROJECT_ROOT/ZalithLauncher/src/main/java/com/movtery/zalithlauncher/ui/screens/content/home/HomeDashboard.kt" || true
 
+          echo "API experimental:"
           grep -n "ExperimentalMaterial3Api" \
             "$PROJECT_ROOT/ZalithLauncher/src/main/java/com/movtery/zalithlauncher/ui/screens/content/home/HomeHeroBanner.kt" || true
 
-      # 12. Diagnóstico de LWJGL e configurações
+      # 12. Diagnóstico do projeto
       - name: Diagnose project configuration
         shell: bash
         run: |
@@ -305,7 +311,7 @@ jobs:
 
           echo "Gradle root: $PROJECT_ROOT"
 
-          echo "Módulos:"
+          echo "Módulos Gradle:"
           find "$PROJECT_ROOT" -maxdepth 3 \
             \( -name build.gradle -o -name build.gradle.kts \) \
             -print | sort
@@ -313,24 +319,22 @@ jobs:
           echo "Diretórios LWJGL:"
           find "$PROJECT_ROOT" -type d -iname '*lwjgl*' -print
 
-          echo "Verificação de patches:"
+          echo "Diretórios patches:"
           find "$PROJECT_ROOT" -type d -path '*/LWJGL/patches' -print
 
-          echo "Configurações Gradle:"
+          echo "Arquivos de configuração:"
           find "$PROJECT_ROOT" -maxdepth 2 \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
             -print
 
-      # 13. Configurar permissões do Gradle
+      # 13. Preparar Gradle
       - name: Prepare Gradle
         shell: bash
-        working-directory: extracted/merged
         run: |
           set -euo pipefail
 
-          chmod +x "$PROJECT_ROOT/gradlew"
-
           cd "$PROJECT_ROOT"
+          chmod +x ./gradlew
 
           ./gradlew \
             --no-daemon \
@@ -340,7 +344,6 @@ jobs:
       # 14. Compilar APK Debug
       - name: Build Zalith Launcher APK
         shell: bash
-        working-directory: extracted/merged
         run: |
           set -euo pipefail
 
@@ -348,9 +351,14 @@ jobs:
 
           source "$HOME/.cargo/env"
 
+          echo "Rust:"
           rustc --version
+
+          echo "Cargo:"
           cargo --version
-          cargo-ndk --version
+
+          echo "Cargo NDK:"
+          cargo ndk --version
 
           test -d "$ANDROID_NDK_HOME"
 
@@ -392,7 +400,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p final-apk
+          mkdir -p "$GITHUB_WORKSPACE/final-apk"
 
           mapfile -t APK_FILES < <(
             find "$PROJECT_ROOT" \
@@ -409,10 +417,10 @@ jobs:
 
           for APK in "${APK_FILES[@]}"; do
             echo "APK encontrado: $APK"
-            cp "$APK" "final-apk/$(basename "$APK")"
+            cp "$APK" "$GITHUB_WORKSPACE/final-apk/$(basename "$APK")"
           done
 
-          ls -lh final-apk
+          ls -lh "$GITHUB_WORKSPACE/final-apk"
 
       # 16. Enviar APK como artefato
       - name: Upload Zalith Launcher APK
@@ -423,7 +431,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 17. Enviar logs para diagnóstico em caso de falha
+      # 17. Enviar diagnósticos em caso de falha
       - name: Upload build diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
