@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Reconstruct and Build APK
+    name: Reconstruct and Build Zalith Launcher 2
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
@@ -78,7 +78,7 @@ jobs:
             exit 1
           fi
 
-          echo "Instalando: $PLATFORM_PACKAGE"
+          echo "Instalando plataforma: $PLATFORM_PACKAGE"
 
           sdkmanager --install \
             "platform-tools" \
@@ -153,19 +153,33 @@ jobs:
           echo "PARTES DO ZALITH"
           echo "======================================"
 
-          ls -lh \
-            ./Zalith-01.zip \
-            ./Zalith-02.zip \
-            ./Zali-03.zip
+          for FILE in \
+            "./Zalith-01.zip" \
+            "./Zalith-02.zip" \
+            "./Zali-03.zip"
+          do
+            if [ -f "$FILE" ]; then
+              ls -lh "$FILE"
+              file "$FILE"
+            else
+              echo "AUSENTE: $FILE"
+            fi
+          done
 
       # ==========================================
-      # 6. RECONSTRUIR E EXTRAIR O PROJETO
+      # 6. EXTRAÇÃO INTELIGENTE DAS PARTES
       # ==========================================
 
       - name: Reconstruct and extract project
         shell: bash
         run: |
           set -euo pipefail
+
+          PARTS=(
+            "./Zalith-01.zip"
+            "./Zalith-02.zip"
+            "./Zali-03.zip"
+          )
 
           echo "Procurando Gradle Wrapper..."
 
@@ -178,101 +192,155 @@ jobs:
 
           if [ -n "$WRAPPER" ]; then
             PROJECT_DIR="$(dirname "$WRAPPER")"
-
-            echo "Projeto já extraído: $PROJECT_DIR"
+            echo "Projeto já existe: $PROJECT_DIR"
             echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
             exit 0
           fi
 
           echo "Gradle Wrapper não encontrado."
-          echo "Usando os nomes reais das partes."
+          echo "Verificando as partes..."
 
-          PART1="./Zalith-01.zip"
-          PART2="./Zalith-02.zip"
-          PART3="./Zali-03.zip"
-
-          for FILE in "$PART1" "$PART2" "$PART3"; do
-            if [ ! -f "$FILE" ]; then
-              echo "ERRO: Parte não encontrada: $FILE"
-              exit 1
-            fi
-
+          for FILE in "${PARTS[@]}"; do
             if [ ! -s "$FILE" ]; then
-              echo "ERRO: Arquivo vazio: $FILE"
+              echo "ERRO: Arquivo ausente ou vazio: $FILE"
               exit 1
             fi
           done
 
-          echo "Partes identificadas:"
-          ls -lh "$PART1" "$PART2" "$PART3"
-
-          mkdir -p /tmp/zalith-parts
-          ARCHIVE="/tmp/zalith-parts/ZalithLauncher2.zip"
-
-          echo "Reconstruindo arquivo em ordem..."
-
-          cat "$PART1" "$PART2" "$PART3" > "$ARCHIVE"
-
-          echo "Arquivo reconstruído:"
-          ls -lh "$ARCHIVE"
-
-          echo "Verificando assinatura e conteúdo do ZIP..."
-
+          rm -rf extracted
           mkdir -p extracted
 
-          python3 - "$ARCHIVE" "$PWD/extracted" <<'PY'
+          export PART1="${PARTS[0]}"
+          export PART2="${PARTS[1]}"
+          export PART3="${PARTS[2]}"
+
+          python3 <<'PY'
+          import os
           import sys
           import zipfile
           from pathlib import Path
 
-          archive = Path(sys.argv[1])
-          destination = Path(sys.argv[2])
+          parts = [
+              Path(os.environ["PART1"]),
+              Path(os.environ["PART2"]),
+              Path(os.environ["PART3"]),
+          ]
 
-          print("Arquivo:", archive)
-          print("Destino:", destination)
+          destination = Path("extracted").resolve()
+          destination.mkdir(parents=True, exist_ok=True)
 
-          try:
-              with zipfile.ZipFile(archive, "r") as z:
-                  entries = z.infolist()
+          independent = True
 
-                  if not entries:
-                      raise RuntimeError("O arquivo ZIP está vazio.")
+          print("======================================")
+          print("ANALISANDO CADA PARTE")
+          print("======================================")
 
-                  print("Arquivos encontrados:", len(entries))
+          for part in parts:
+              print(f"\nArquivo: {part}")
+              print(f"Tamanho: {part.stat().st_size} bytes")
 
-                  # Verifica a integridade de todos os arquivos.
-                  damaged = z.testzip()
+              try:
+                  with zipfile.ZipFile(part, "r") as archive:
+                      entries = archive.infolist()
 
-                  if damaged is not None:
-                      raise RuntimeError(
-                          "Arquivo danificado: " + damaged
-                      )
+                      if not entries:
+                          independent = False
+                          print("ZIP sem arquivos.")
+                          continue
 
-                  print("Integridade dos arquivos confirmada.")
+                      damaged = archive.testzip()
 
-                  # Impede caminhos de extração fora da pasta.
-                  root = destination.resolve()
-
-                  for entry in entries:
-                      target = (root / entry.filename).resolve()
-
-                      if target != root and root not in target.parents:
+                      if damaged:
                           raise RuntimeError(
-                              "Caminho inseguro no ZIP: " + entry.filename
+                              f"Arquivo danificado: {damaged}"
                           )
 
-                  print("Extraindo arquivos...")
+                      print(f"ZIP independente válido: {len(entries)} entradas")
 
-                  z.extractall(root)
+                      for entry in entries[:40]:
+                          print("  " + entry.filename)
 
-                  print("Extração concluída.")
+              except zipfile.BadZipFile:
+                  independent = False
+                  print("Não é um ZIP independente.")
 
-          except Exception as error:
-              print("ERRO AO PROCESSAR O ARQUIVO:", error)
-              sys.exit(1)
+          def safe_extract(archive, target):
+              root = target.resolve()
+
+              for entry in archive.infolist():
+                  output = (root / entry.filename).resolve()
+
+                  if output != root and root not in output.parents:
+                      raise RuntimeError(
+                          "Caminho inseguro no ZIP: " + entry.filename
+                      )
+
+              archive.extractall(root)
+
+          if independent:
+              print("\n======================================")
+              print("MODO: EXTRAINDO ZIPs SEPARADAMENTE")
+              print("======================================")
+
+              for part in parts:
+                  print(f"\nExtraindo {part}...")
+
+                  with zipfile.ZipFile(part, "r") as archive:
+                      safe_extract(archive, destination)
+
+          else:
+              print("\n======================================")
+              print("MODO: RECONSTRUINDO FRAGMENTOS")
+              print("======================================")
+
+              combined = Path(
+                  "/tmp/ZalithLauncher2-combined.zip"
+              )
+
+              with combined.open("wb") as output:
+                  for part in parts:
+                      print("Adicionando:", part)
+
+                      with part.open("rb") as source:
+                          while True:
+                              block = source.read(1024 * 1024)
+
+                              if not block:
+                                  break
+
+                              output.write(block)
+
+              print("Arquivo reconstruído:", combined)
+              print("Tamanho:", combined.stat().st_size)
+
+              with zipfile.ZipFile(combined, "r") as archive:
+                  damaged = archive.testzip()
+
+                  if damaged:
+                      raise RuntimeError(
+                          "ZIP reconstruído danificado: " + damaged
+                      )
+
+                  print("Entradas encontradas:", len(archive.infolist()))
+                  safe_extract(archive, destination)
+
+          print("\nExtração concluída.")
           PY
 
-          echo "Localizando Gradle Wrapper..."
+          # ======================================
+          # PROCURAR PROJETO GRADLE
+          # ======================================
+
+          echo "======================================"
+          echo "PROCURANDO PROJETO GRADLE"
+          echo "======================================"
+
+          find extracted -type f \
+            \( -name gradlew \
+            -o -name settings.gradle \
+            -o -name settings.gradle.kts \
+            -o -name gradle-wrapper.properties \) \
+            -print
 
           WRAPPER="$(
             find extracted -type f \
@@ -281,9 +349,21 @@ jobs:
           )"
 
           if [ -z "$WRAPPER" ]; then
-            echo "ERRO: gradlew não foi encontrado."
-            echo "Primeiros arquivos extraídos:"
-            find extracted -maxdepth 5 -type f | head -200
+            echo "ERRO: gradlew não encontrado."
+
+            echo "Estrutura extraída:"
+            find extracted -maxdepth 8 -type f -print | sort
+
+            echo "Pastas extraídas:"
+            find extracted -maxdepth 5 -type d -print | sort
+
+            echo "Arquivos de configuração Gradle:"
+            find extracted -type f \
+              \( -name '*.gradle' \
+              -o -name '*.gradle.kts' \
+              -o -name 'gradle-wrapper.properties' \) \
+              -print
+
             exit 1
           fi
 
@@ -291,17 +371,17 @@ jobs:
 
           if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
              [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "ERRO: Arquivo settings.gradle não encontrado."
+            echo "ERRO: settings.gradle não encontrado."
             exit 1
           fi
 
-          chmod +x "$PROJECT_DIR/gradlew"
+          chmod +x "$WRAPPER"
 
-          echo "Projeto localizado: $PROJECT_DIR"
+          echo "Projeto encontrado: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # ==========================================
-      # 7. VALIDAR PROJETO
+      # 7. VALIDAR PROJETO GRADLE
       # ==========================================
 
       - name: Verify Gradle project
@@ -314,7 +394,7 @@ jobs:
           echo "Diretório do projeto:"
           pwd
 
-          echo "Conteúdo:"
+          echo "Arquivos:"
           ls -la
 
           test -f gradlew
@@ -331,7 +411,7 @@ jobs:
           echo "Projeto Gradle validado."
 
       # ==========================================
-      # 8. VALIDAR FERRAMENTAS
+      # 8. VERIFICAR FERRAMENTAS
       # ==========================================
 
       - name: Verify build environment
@@ -359,7 +439,7 @@ jobs:
           ./gradlew --version
 
       # ==========================================
-      # 9. LISTAR TAREFAS
+      # 9. LISTAR TAREFAS GRADLE
       # ==========================================
 
       - name: List Gradle tasks
@@ -412,11 +492,11 @@ jobs:
               -type f \
               -path '*/build/outputs/apk/*/*.apk' \
               ! -name '*-androidTest.apk' |
-              sort
+            sort
           )
 
           if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "ERRO: Nenhum APK foi encontrado."
+            echo "ERRO: Nenhum APK encontrado."
             find "$PROJECT_DIR" -type f -name '*.apk' -print
             exit 1
           fi
@@ -430,7 +510,7 @@ jobs:
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
 
       # ==========================================
-      # 12. ENVIAR APK
+      # 12. PUBLICAR APK
       # ==========================================
 
       - name: Upload Debug APK
@@ -442,7 +522,7 @@ jobs:
           retention-days: 14
 
       # ==========================================
-      # 13. RELATÓRIOS DE COMPILAÇÃO
+      # 13. RELATÓRIOS
       # ==========================================
 
       - name: Upload build reports
