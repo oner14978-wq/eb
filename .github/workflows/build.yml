@@ -487,11 +487,11 @@ jobs:
 
           ./gradlew \
             --no-daemon \
-            --stacktrace \
+            --console=plain \
             tasks --all
 
       # ==========================================
-      # 13. COMPILAR ZALITH
+      # 13. COMPILAR ZALITH COM LOG COMPLETO
       # ==========================================
 
       - name: Compilar Zalith Launcher 2
@@ -505,7 +505,7 @@ jobs:
           echo "INICIANDO COMPILAÇÃO"
           echo "======================================"
 
-          echo "Verificando cargo-ndk..."
+          echo "Verificando Rust e cargo-ndk..."
 
           command -v cargo
           command -v rustc
@@ -516,18 +516,49 @@ jobs:
           echo "Verificando Android NDK..."
 
           echo "$ANDROID_NDK_HOME"
-
           test -d "$ANDROID_NDK_HOME"
 
           echo "======================================"
-          echo "COMPILANDO APK"
+          echo "EXECUTANDO GRADLE"
           echo "======================================"
+
+          set +e
 
           ./gradlew \
             --no-daemon \
-            --stacktrace \
-            --warning-mode all \
-            :ZalithLauncher:assembleDebug
+            --console=plain \
+            --warning-mode summary \
+            :ZalithLauncher:assembleDebug \
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          STATUS=${PIPESTATUS[0]}
+
+          set -e
+
+          if [ "$STATUS" -ne 0 ]; then
+
+            echo ""
+            echo "======================================"
+            echo "RESUMO DO ERRO"
+            echo "======================================"
+
+            grep -n -E \
+              "FAILED|What went wrong|error:|error\[|e: |Caused by|Exception" \
+              -A12 "$GITHUB_WORKSPACE/build.log" |
+              sed -n '1,160p' || true
+
+            echo ""
+            echo "======================================"
+            echo "FINAL DO LOG COMPLETO"
+            echo "======================================"
+
+            tail -n 100 "$GITHUB_WORKSPACE/build.log"
+
+            echo ""
+            echo "Compilação falhou. Código: $STATUS"
+
+            exit "$STATUS"
+          fi
 
           echo "======================================"
           echo "COMPILAÇÃO CONCLUÍDA"
@@ -572,9 +603,7 @@ jobs:
             DEST="final-apk/$(basename "$APK")"
 
             if [ -e "$DEST" ]; then
-
               DEST="final-apk/$(basename "$(dirname "$(dirname "$(dirname "$APK")")")")-$(basename "$APK")"
-
             fi
 
             cp "$APK" "$DEST"
@@ -609,6 +638,7 @@ jobs:
         with:
           name: Zalith-Build-Diagnostics
           path: |
+            build.log
             zip_diagnostics/
             extracted/
           if-no-files-found: ignore
