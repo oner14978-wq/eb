@@ -359,7 +359,7 @@ jobs:
           [ "$HAS_RUST" = "true" ] && { [ -f PetLib/rust/Cargo.lock ] && echo "Cargo.lock OK" || problem "Cargo.lock ausente"; }
                 - name: "Verificação do catálogo de dependências (libs.*)"
         working-directory: ${{ env.PROJECT_DIR }}
-        run:
+        
           python3 - <<'PY'
           import os, re, sys, glob
           try:
