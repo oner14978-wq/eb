@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip zip python3 findutils file
 
-      # 3. Extrair todos os ZIPs do projeto
+      # 3. Extrair os ZIPs do projeto
       - name: Extract Zalith ZIP files
         shell: bash
         run: |
@@ -37,21 +37,41 @@ jobs:
           mkdir -p extracted/merged
           mkdir -p zip_diagnostics
 
-          mapfile -t ZIP_FILES < <(
+          # Priorizar o projeto já corrigido.
+          CORRECTED_ZIP=""
+
+          while IFS= read -r FILE; do
+            CORRECTED_ZIP="$FILE"
+            break
+          done < <(
             find "$GITHUB_WORKSPACE" \
               -maxdepth 3 \
               -type f \
-              -iname 'Zali*.zip' \
+              -iname 'ZalithLauncher2-corrigido.zip' \
               -not -path '*/extracted/*' \
-              -print | sort
+              -print
           )
+
+          if [ -n "$CORRECTED_ZIP" ]; then
+            ZIP_FILES=("$CORRECTED_ZIP")
+            echo "Usando projeto corrigido: $CORRECTED_ZIP"
+          else
+            mapfile -t ZIP_FILES < <(
+              find "$GITHUB_WORKSPACE" \
+                -maxdepth 3 \
+                -type f \
+                -iname 'Zali*.zip' \
+                -not -path '*/extracted/*' \
+                -print | sort
+            )
+          fi
 
           if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
             echo "::error title=ZIP não encontrado::Nenhum arquivo ZIP Zalith foi encontrado."
             exit 1
           fi
 
-          echo "ZIPs encontrados: ${#ZIP_FILES[@]}"
+          echo "ZIPs selecionados: ${#ZIP_FILES[@]}"
 
           for ZIP_FILE in "${ZIP_FILES[@]}"; do
             echo "Verificando: $(basename "$ZIP_FILE")"
@@ -64,7 +84,7 @@ jobs:
             unzip -oq "$ZIP_FILE" -d extracted/merged
           done
 
-          find extracted/merged -maxdepth 3 -type f \
+          find extracted/merged -type f \
             | sort > zip_diagnostics/extracted-files.txt
 
           echo "Extração concluída."
@@ -112,6 +132,7 @@ jobs:
           fi
 
           echo "Código-fonte encontrado."
+
           find "$PROJECT_ROOT/ZalithLauncher/src/main" \
             -maxdepth 2 -type d | sort | sed -n '1,20p'
 
@@ -211,7 +232,7 @@ jobs:
           echo "Cargo NDK: $(cargo ndk --version)"
           echo "NDK configurado."
 
-      # 11. CORREÇÃO DOS ERROS KOTLIN DO REDESIGN
+      # 11. Corrigir erros Kotlin do redesign
       - name: Fix Kotlin Compose compilation issues
         shell: bash
         run: |
@@ -229,21 +250,21 @@ jobs:
 
               if len(matches) != 1:
                   print(
-                      f"ERRO: esperado exatamente um arquivo "
-                      f"{filename}; encontrados: {len(matches)}"
+                      f"ERRO: esperado exatamente um {filename}; "
+                      f"encontrados: {len(matches)}"
                   )
-                  for item in matches:
-                      print(item)
+                  for path in matches:
+                      print(path)
                   sys.exit(1)
 
               return matches[0]
 
-          # CORREÇÃO 1:
-          # Remover import inválido de Modifier.weight.
+          # HOME DASHBOARD
           dashboard = find_unique("HomeDashboard.kt")
           source = dashboard.read_text(encoding="utf-8")
 
-          source, removed = re.subn(
+          # Remover import inválido de weight.
+          source = re.sub(
               r"(?m)^[ \t]*import[ \t]+"
               r"androidx\.compose\.foundation\.layout\.weight"
               r"[ \t]*\r?\n",
@@ -251,77 +272,148 @@ jobs:
               source
           )
 
+          # Garantir import de ColumnScope.
+          if not re.search(
+              r"(?m)^import androidx\.compose\.foundation\.layout\.ColumnScope$",
+              source
+          ):
+              imports = list(
+                  re.finditer(r"(?m)^import[ \t]+[^\n]+", source)
+              )
+
+              if not imports:
+                  raise SystemExit(
+                      "ERRO: imports de HomeDashboard.kt não encontrados."
+                  )
+
+              position = imports[-1].end()
+
+              source = (
+                  source[:position]
+                  + "\nimport androidx.compose.foundation.layout.ColumnScope"
+                  + source[position:]
+              )
+
+          # Localizar SectionCard.
+          declaration = re.search(
+              r"(?m)^(?:(?:private|internal|public)\s+)?"
+              r"@Composable\s+fun\s+SectionCard\b",
+              source
+          )
+
+          if not declaration:
+              raise SystemExit(
+                  "ERRO: declaração SectionCard não encontrada."
+              )
+
+          next_declaration = re.search(
+              r"(?m)^(?:(?:private|internal|public)\s+)?"
+              r"@Composable\s+fun\s+",
+              source[declaration.end():]
+          )
+
+          section_end = (
+              declaration.end() + next_declaration.start()
+              if next_declaration
+              else len(source)
+          )
+
+          section = source[declaration.start():section_end]
+
+          # Corrigir o escopo do conteúdo.
+          section, replacements = re.subn(
+              r"(content\s*:\s*)@Composable\s*"
+              r"\(\s*\)\s*->\s*Unit",
+              r"\1@Composable ColumnScope.() -> Unit",
+              section,
+              count=1
+          )
+
+          if replacements == 0:
+              if not re.search(
+                  r"content\s*:\s*@Composable\s*"
+                  r"ColumnScope\.\(\s*\)\s*->\s*Unit",
+                  section
+              ):
+                  raise SystemExit(
+                      "ERRO: assinatura de SectionCard não corresponde "
+                      "ao formato esperado. Verifique o arquivo original."
+                  )
+
+          source = (
+              source[:declaration.start()]
+              + section
+              + source[section_end:]
+          )
+
           dashboard.write_text(source, encoding="utf-8")
 
-          if removed:
-              print(
-                  "HomeDashboard.kt: import incorreto de weight removido."
-              )
-          else:
-              print(
-                  "HomeDashboard.kt: import incorreto de weight já estava ausente."
-              )
+          print("HomeDashboard.kt: SectionCard corrigido.")
 
-          # CORREÇÃO 2:
-          # Autorizar ExperimentalMaterial3Api no arquivo.
+          # HOME HERO BANNER
           hero = find_unique("HomeHeroBanner.kt")
           source = hero.read_text(encoding="utf-8")
 
-          if "ExperimentalMaterial3Api::class" not in source:
-              package_match = re.search(
+          # Remover autorização antiga de outra API.
+          source = re.sub(
+              r"(?m)^[ \t]*@file:OptIn\("
+              r"androidx\.compose\.material3\.ExperimentalMaterial3Api::class"
+              r"\)[ \t]*\r?\n",
+              "",
+              source
+          )
+
+          # Adicionar autorização da API Expressive.
+          if "ExperimentalMaterial3ExpressiveApi::class" not in source:
+              package = re.search(
                   r"(?m)^package[ \t]+[^\n]+",
                   source
               )
 
-              if not package_match:
-                  print(
-                      "ERRO: declaração package não encontrada "
-                      "em HomeHeroBanner.kt."
+              if not package:
+                  raise SystemExit(
+                      "ERRO: package não encontrado em HomeHeroBanner.kt."
                   )
-                  sys.exit(1)
 
               annotation = (
                   "@file:OptIn("
                   "androidx.compose.material3."
-                  "ExperimentalMaterial3Api::class"
+                  "ExperimentalMaterial3ExpressiveApi::class"
                   ")"
               )
 
               source = (
-                  source[:package_match.start()]
+                  source[:package.start()]
                   + annotation
                   + "\n"
-                  + source[package_match.start():]
+                  + source[package.start():]
               )
 
-              hero.write_text(source, encoding="utf-8")
+          hero.write_text(source, encoding="utf-8")
 
-              print(
-                  "HomeHeroBanner.kt: autorização Material3 adicionada."
-              )
-          else:
-              print(
-                  "HomeHeroBanner.kt: autorização Material3 já existe."
-              )
+          print("HomeHeroBanner.kt: API Expressive autorizada.")
 
-          # Verificação final
-          dashboard_source = dashboard.read_text(encoding="utf-8")
+          # VERIFICAÇÃO FINAL
+          dashboard_check = dashboard.read_text(encoding="utf-8")
+          hero_check = hero.read_text(encoding="utf-8")
 
           if re.search(
-              r"(?m)^[ \t]*import[ \t]+"
-              r"androidx\.compose\.foundation\.layout\.weight",
-              dashboard_source
+              r"(?m)^import androidx\.compose\.foundation\.layout\.weight$",
+              dashboard_check
           ):
-              print("ERRO: import incorreto de weight continua presente.")
-              sys.exit(1)
+              raise SystemExit("ERRO: import inválido de weight permanece.")
 
-          hero_source = hero.read_text(encoding="utf-8")
+          if not re.search(
+              r"content\s*:\s*@Composable\s*"
+              r"ColumnScope\.\(\s*\)\s*->\s*Unit",
+              dashboard_check
+          ):
+              raise SystemExit("ERRO: SectionCard não foi corrigido.")
 
-          if "ExperimentalMaterial3Api::class" not in hero_source:
-              print("ERRO: autorização Material3 não foi aplicada.")
-              sys.exit(1)
+          if "ExperimentalMaterial3ExpressiveApi::class" not in hero_check:
+              raise SystemExit("ERRO: autorização Expressive ausente.")
 
-          print("As duas correções Kotlin foram verificadas.")
+          print("VERIFICAÇÃO: correções Kotlin aplicadas.")
           PY
 
           echo "Correções Kotlin concluídas."
@@ -382,7 +474,7 @@ jobs:
             exit "$STATUS"
           fi
 
-      # 14. Compilar APK com captura correta de erros
+      # 14. Compilar APK com captura de erros
       - name: Build Zalith Launcher APK
         shell: bash
         run: |
@@ -397,7 +489,6 @@ jobs:
           LOG="$GITHUB_WORKSPACE/build.log"
 
           echo "Iniciando compilação do Zalith Launcher 2..."
-          echo "Log completo: build.log"
 
           if ./gradlew \
             --no-daemon \
@@ -412,40 +503,31 @@ jobs:
           fi
 
           if [ "$STATUS" -ne 0 ]; then
-            echo ""
             echo "::error title=BUILD FAILED::A compilação do APK falhou."
 
-            echo ""
             echo "========== RESUMO DOS ERROS =========="
 
             grep -n -E \
               'What went wrong:|Execution failed for task|Compilation error|Unresolved reference|Type mismatch|e: file://|error:|\.kt:[0-9]+:[0-9]+' \
               "$LOG" | tail -n 25 || true
 
-            echo ""
             echo "========== CAUSA DO GRADLE =========="
 
             grep -A 10 -E \
               'What went wrong:' "$LOG" | tail -n 15 || true
 
-            echo ""
             echo "========== TAREFAS QUE FALHARAM =========="
 
             grep -E \
               '^> Task .* FAILED|Execution failed for task' \
               "$LOG" | tail -n 10 || true
 
-            echo ""
             echo "========== ÚLTIMAS LINHAS =========="
             tail -n 25 "$LOG"
-
-            echo ""
-            echo "Consulte o artefato Zalith-Build-Diagnostics."
 
             exit "$STATUS"
           fi
 
-          echo ""
           echo "BUILD SUCCESSFUL"
           echo "APK compilado com sucesso."
 
