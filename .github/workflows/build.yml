@@ -234,7 +234,7 @@ jobs:
           e() { grep -A14 -m1 "What went wrong" "$REPORT_DIR/build-$2.log" | head -16; }
           f() { e "$@"; echo "::error title=Falha em $1::$(e "$@" | sed ':a;N;$!ba;s/\n/%0A/g')"; }
           for i in 1 2 3; do
-            if ./gradlew "${APP_PATH}:$1" --no-daemon -q --console=plain > "$REPORT_DIR/build-$2.log" 2>&1; then echo "Build $1 OK"; exit 0; fi
+            if ./gradlew "${APP_PATH}:$1" -I /tmp/oi.gradle --no-daemon -q --console=plain > "$REPORT_DIR/build-$2.log" 2>&1; then echo "Build $1 OK"; exit 0; fi
             c=0
             for loc in $(grep -A1 "Unresolved reference 'weight'" "$REPORT_DIR/build-$2.log" | grep -oE 'Location: /[^ ]+ line [0-9]+' | tr ' ' '|'); do
               IFS='|' read -r _ p _ l <<< "$loc"
@@ -245,25 +245,17 @@ jobs:
           done
           f "$@"; exit 1
           S
+          cat > /tmp/oi.gradle <<'O'
+          allprojects { tasks.matching { it.class.name.contains('KotlinCompile') }.configureEach { t -> try { t.compilerOptions.optIn.addAll(['androidx.compose.material3.ExperimentalMaterial3Api','androidx.compose.material3.ExperimentalMaterial3ExpressiveApi','androidx.compose.foundation.ExperimentalFoundationApi','androidx.compose.foundation.layout.ExperimentalLayoutApi','androidx.compose.animation.ExperimentalAnimationApi','androidx.compose.ui.ExperimentalComposeUiApi','androidx.compose.animation.ExperimentalSharedTransitionApi']) } catch (e) {} } }
+          O
 
       - name: "Segunda verificação (após as correções)"
         run: |
           cd "$PROJECT_DIR"
-          fail=0
-          if ! test -x gradlew; then
-            echo "::error::gradlew continua sem permissão"
-            fail=1
-          fi
-          for f in gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties "$APP_DIR/src/main/AndroidManifest.xml"; do
-            if [ ! -f "$f" ]; then
-              echo "::error::arquivo ausente: $f"
-              fail=1
-            fi
+          for f in gradlew gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties "$APP_DIR/src/main/AndroidManifest.xml"; do
+            [ -f "$f" ] || { echo "::error::arquivo ausente: $f"; exit 1; }
           done
-          if [ "$fail" -ne 0 ]; then
-            echo "Segunda verificação FALHOU" >> "$REPORT_DIR/problems.txt"
-            exit 1
-          fi
+          [ -x gradlew ] || { echo "::error::gradlew sem permissão"; exit 1; }
           echo "Segunda verificação OK"
 
       - name: Instalar JDKs necessários
@@ -283,8 +275,7 @@ jobs:
           echo "$B" >> "$GITHUB_PATH"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
-          (yes | "$B/sdkmanager" --licenses) > "$REPORT_DIR/sdk.log" 2>&1 || true
-          "$B/sdkmanager" --list_installed 2>&1 >> "$REPORT_DIR/sdk.log"
+          yes | "$B/sdkmanager" --licenses >/dev/null 2>&1 || true
 
       - name: Instalar NDK
         if: env.NDK_VERSION != ''
@@ -306,23 +297,19 @@ jobs:
 
       - name: Decidir tipos de build
         run: |
-          debug=false; release=false
-          has_secrets=false
-          if [ -n "${STORE_PASSWORD:-}" ] && [ -n "${KEY_PASSWORD:-}" ]; then has_secrets=true; fi
+          s=false; [ -n "${STORE_PASSWORD:-}" ] && [ -n "${KEY_PASSWORD:-}" ] && s=true
+          d=true; r=false
           case "$BUILD_TYPE" in
-            debug)   debug=true ;;
-            release) release=true ;;
-            both)    debug=true; release=true ;;
-            *)       debug=true; [ "$has_secrets" = "true" ] && release=true ;;
+            debug) ;;
+            release) d=false; r=true ;;
+            both) r=true ;;
+            *) r=$s ;;
           esac
-          if [ "$release" = "true" ] && [ "$has_secrets" != "true" ]; then
-            echo "::warning::Release pedido, mas faltam STORE_PASSWORD/KEY_PASSWORD. Release será ignorado."
-            echo "Release ignorado: secrets de assinatura ausentes" >> "$REPORT_DIR/problems.txt"
-            release=false
+          if [ "$r" = true ] && [ "$s" != true ]; then
+            echo "::warning::Release ignorado: faltam STORE_PASSWORD/KEY_PASSWORD."
+            echo "Release ignorado: secrets ausentes" >> "$REPORT_DIR/problems.txt"; r=false
           fi
-          echo "BUILD_DEBUG=$debug" >> "$GITHUB_ENV"
-          echo "BUILD_RELEASE=$release" >> "$GITHUB_ENV"
-          echo "Debug=$debug Release=$release"
+          echo "BUILD_DEBUG=$d" >> "$GITHUB_ENV"; echo "BUILD_RELEASE=$r" >> "$GITHUB_ENV"
 
       - name: Compilar Debug
         if: env.BUILD_DEBUG == 'true'
