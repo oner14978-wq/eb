@@ -85,8 +85,8 @@ jobs:
           while IFS= read -r FILE; do
             DIR="$(dirname "$FILE")"
 
-            if [ -f "$DIR/settings.gradle" ] || \
-               [ -f "$DIR/settings.gradle.kts" ]; then
+            if { [ -f "$DIR/settings.gradle" ] || [ -f "$DIR/settings.gradle.kts" ]; } && \
+               [ -d "$DIR/ZalithLauncher" ]; then
               PROJECT_ROOT="$DIR"
               break
             fi
@@ -98,12 +98,7 @@ jobs:
           )
 
           if [ -z "$PROJECT_ROOT" ]; then
-            echo "::error title=Projeto Gradle não encontrado::Não foi encontrado gradlew junto com settings.gradle."
-            exit 1
-          fi
-
-          if [ ! -d "$PROJECT_ROOT/ZalithLauncher" ]; then
-            echo "::error title=Módulo ausente::O módulo ZalithLauncher não foi encontrado no projeto selecionado."
+            echo "::error title=Projeto Gradle não encontrado::Não foi encontrado um projeto com gradlew, settings e módulo ZalithLauncher."
             exit 1
           fi
 
@@ -122,7 +117,6 @@ jobs:
           fi
 
           echo "Código-fonte encontrado."
-          echo "Estrutura principal:"
           find "$PROJECT_ROOT/ZalithLauncher/src/main" \
             -maxdepth 2 -type d | sort | sed -n '1,20p'
 
@@ -358,83 +352,96 @@ jobs:
           cd "$PROJECT_ROOT"
           chmod +x ./gradlew
 
-          if ! ./gradlew \
+          if ./gradlew \
             --no-daemon \
             --console=plain \
             tasks --all \
             > "$GITHUB_WORKSPACE/gradle-tasks.log" 2>&1; then
+            echo "Gradle preparado."
+          else
+            STATUS=$?
 
             echo "::error title=Preparação Gradle falhou::Não foi possível carregar as tarefas do projeto."
 
-            grep -E \
+            grep -n -E \
               'What went wrong:|Could not|failed|ERROR|Error:' \
               "$GITHUB_WORKSPACE/gradle-tasks.log" \
-              | tail -n 8 || true
+              | tail -n 10 || true
 
-            exit 1
+            exit "$STATUS"
           fi
 
-          echo "Gradle preparado."
-
-      # 14. Compilar APK Debug com resumo curto de erros
+      # 14. Compilar APK Debug com captura correta de erros
       - name: Build Zalith Launcher APK
         shell: bash
         run: |
           set -uo pipefail
 
           cd "$PROJECT_ROOT"
-          source "$HOME/.cargo/env"
+
+          if [ -f "$HOME/.cargo/env" ]; then
+            source "$HOME/.cargo/env"
+          fi
 
           LOG="$GITHUB_WORKSPACE/build.log"
 
           echo "Iniciando compilação do Zalith Launcher 2..."
           echo "O log completo será salvo para diagnóstico."
 
-          ./gradlew \
+          if ./gradlew \
             --no-daemon \
             --console=plain \
             --warning-mode summary \
             :ZalithLauncher:assembleDebug \
-            > "$LOG" 2>&1
+            > "$LOG" 2>&1; then
 
-          STATUS=$?
+            STATUS=0
+          else
+            STATUS=$?
+          fi
 
           if [ "$STATUS" -ne 0 ]; then
             echo ""
-            echo "::error title=BUILD FAILED::A compilação do APK falhou. Consulte o resumo abaixo."
+            echo "::error title=BUILD FAILED::A compilação do APK falhou."
 
             echo ""
-            echo "========== RESUMO DA FALHA =========="
+            echo "========== RESUMO DOS ERROS =========="
 
-            grep -n -E \
+            if ! grep -n -E \
               'What went wrong:|Execution failed for task|Compilation error|Unresolved reference|Type mismatch|e: file://|error:|\.kt:[0-9]+:[0-9]+' \
-              "$LOG" \
-              | tail -n 15 || true
+              "$LOG" | tail -n 20; then
+              echo "Nenhuma mensagem de erro reconhecida no filtro."
+            fi
 
             echo ""
             echo "========== CAUSA DO GRADLE =========="
 
-            grep -A 8 -E \
-              'What went wrong:' \
-              "$LOG" \
-              | tail -n 12 || true
+            if ! grep -A 10 -E \
+              'What went wrong:' "$LOG" | tail -n 15; then
+              echo "O Gradle não apresentou o bloco What went wrong."
+            fi
 
             echo ""
-            echo "========== TAREFA QUE FALHOU =========="
+            echo "========== TAREFAS QUE FALHARAM =========="
 
-            grep -E \
+            if ! grep -E \
               '^> Task .* FAILED|Execution failed for task' \
-              "$LOG" \
-              | tail -n 5 || true
+              "$LOG" | tail -n 8; then
+              echo "A tarefa que falhou não foi identificada no resumo."
+            fi
 
             echo ""
-            echo "O log completo está no artefato:"
-            echo "Zalith-Build-Diagnostics"
+            echo "========== ÚLTIMAS LINHAS =========="
+            tail -n 20 "$LOG"
+
+            echo ""
+            echo "LOG COMPLETO: Zalith-Build-Diagnostics"
 
             exit "$STATUS"
           fi
 
           echo ""
+          echo "BUILD SUCCESSFUL"
           echo "APK compilado com sucesso."
 
       # 15. Localizar e organizar APK
