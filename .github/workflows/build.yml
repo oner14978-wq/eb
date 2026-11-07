@@ -105,7 +105,6 @@ jobs:
             ok=$((ok+1))
           done
 
-          # LEIA-ME: o nome pedido é LEIA-ME.72; o arquivo real do pacote chama-se LEIA-ME.7z
           readme=""
           for cand in "LEIA-ME.72" "LEIA-ME.7z" "LEIA-ME*"; do
             r=$(find_one "$cand" | head -1); [ -n "$r" ] && { readme="$r"; break; }
@@ -126,18 +125,6 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "ZIPs esperados=$expected encontrados=$found aprovados=$ok"
           [ "$ok" -eq "$expected" ] || { echo "::error::Nem todos os ZIPs passaram na verificação."; exit 1; }
-
-      - name: Ler o LEIA-ME (informativo)
-        continue-on-error: true
-        run: |
-          [ -f "$REPORT_DIR/readme_path.txt" ] || exit 0
-          f=$(cat "$REPORT_DIR/readme_path.txt")
-          command -v 7z >/dev/null 2>&1 || sudo apt-get install -y -qq p7zip-full >/dev/null
-          mkdir -p /tmp/leiame && 7z x -y -p"" -o/tmp/leiame "$f" >/dev/null 2>&1 \
-            || 7z x -y -o/tmp/leiame "$f" >/dev/null 2>&1 \
-            || { echo "::warning::Não foi possível abrir $f"; exit 0; }
-          echo "----- conteúdo de $(basename "$f") -----"
-          find /tmp/leiame -type f -exec sh -c 'echo "## $1"; head -c 4000 "$1"; echo' _ {} \;
 
       - name: "Verificação 2/4 - extrair para estrutura organizada e detectar conflitos"
         run: |
@@ -166,47 +153,46 @@ jobs:
       - name: "Verificação 3/4 - identificar a estrutura real do projeto Android"
         run: |
           base64 -d <<'B64' | gunzip | python3 -
-          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
+          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
           B64
 
       - name: "Verificação 4/4 - correção automática"
@@ -216,12 +202,10 @@ jobs:
           fixed()   { echo "$1" >> "$REPORT_DIR/fixed.txt"; echo "CORRIGIDO: $1"; }
           problem() { echo "$1" >> "$REPORT_DIR/problems.txt"; echo "::warning::PROBLEMA: $1"; }
 
-          # (a) permissão de execução do wrapper (ZIP/Git podem perder o bit)
           if [ ! -x gradlew ]; then
             problem "gradlew sem permissão de execução"; chmod +x gradlew && fixed "chmod +x gradlew"
           fi
 
-          # (b) foojay-resolver-convention <= 0.9.x quebra no Gradle 9 (JvmVendorSpec.IBM_SEMERU)
           gmaj=${GRADLE_VERSION%%.*}
           for s in settings.gradle.kts settings.gradle; do
             [ -f "$s" ] || continue
@@ -237,12 +221,10 @@ jobs:
             fi
           done
 
-          # (c) keystores usados pelos signingConfigs
           for k in "$APP_DIR"/zalith_launcher_debug.jks "$APP_DIR"/zalith_launcher.jks; do
             [ -f "$k" ] && echo "keystore OK: $k" || problem "keystore ausente: $k"
           done
 
-          # (e) caminho do ndk-build e fontes nativas
           if [ -n "${NDK_MK_PATH:-}" ]; then
             [ -f "$APP_DIR/$NDK_MK_PATH" ] && echo "Android.mk OK" || problem "Android.mk ausente: $APP_DIR/$NDK_MK_PATH"
           fi
@@ -291,13 +273,24 @@ jobs:
           java-version: ${{ env.JDK_LIST }}
 
       - name: Instalar Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          B="$ANDROID_HOME/cmdline-tools/latest/bin"
+          if [ ! -x "$B/sdkmanager" ]; then
+            curl -fsSL -o /tmp/ct.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/ct.zip -d /tmp/ct && mkdir -p "$ANDROID_HOME/cmdline-tools" && mv /tmp/ct/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
+          fi
+          echo "$B" >> "$GITHUB_PATH"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          (yes | "$B/sdkmanager" --licenses) > "$REPORT_DIR/sdk.log" 2>&1 || true
+          "$B/sdkmanager" --list_installed 2>&1 | tee -a "$REPORT_DIR/sdk.log" | head -20
 
       - name: Instalar NDK
         if: env.NDK_VERSION != ''
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "ndk;${NDK_VERSION}"
+          sdkmanager "ndk;${NDK_VERSION}" 2>&1 | tee "$REPORT_DIR/ndk.log"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Instalar Rust (se o projeto usar)
@@ -334,13 +327,13 @@ jobs:
         if: env.BUILD_DEBUG == 'true'
         run: |
           cd "$PROJECT_DIR"
-          ./gradlew "${APP_PATH}:assembleDebug" --stacktrace --no-daemon
+          ./gradlew "${APP_PATH}:assembleDebug" --stacktrace --no-daemon 2>&1 | tee "$REPORT_DIR/build-debug.log"
 
       - name: Compilar Release
         if: env.BUILD_RELEASE == 'true'
         run: |
           cd "$PROJECT_DIR"
-          ./gradlew "${APP_PATH}:assembleRelease" --stacktrace --no-daemon
+          ./gradlew "${APP_PATH}:assembleRelease" --stacktrace --no-daemon 2>&1 | tee "$REPORT_DIR/build-release.log"
 
       - name: Coletar APKs
         if: always()
@@ -393,5 +386,12 @@ jobs:
             cat "$REPORT_DIR/problems.txt" 2>/dev/null || true
             echo "### Correções automáticas"
             cat "$REPORT_DIR/fixed.txt" 2>/dev/null || true
+            for l in "$REPORT_DIR"/*.log; do
+              [ -f "$l" ] || continue
+              echo "### Log: $(basename "$l")"; echo '```'
+              if grep -q 'What went wrong' "$l"; then grep -A25 -m1 'What went wrong' "$l"
+              else grep -iE 'error|fail|exception|denied' "$l" | tail -n 15; fi
+              echo '```'
+            done
           } >> "$GITHUB_STEP_SUMMARY"
           
