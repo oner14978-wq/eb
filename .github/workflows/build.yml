@@ -26,12 +26,7 @@ jobs:
       - name: Install system tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            unzip \
-            zip \
-            python3 \
-            findutils \
-            file
+          sudo apt-get install -y unzip zip python3 findutils file
 
       # 3. Extrair todos os ZIPs do projeto
       - name: Extract Zalith ZIP files
@@ -103,7 +98,7 @@ jobs:
           fi
 
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-          echo "Projeto Gradle localizado."
+          echo "Projeto Gradle localizado: $PROJECT_ROOT"
 
       # 5. Verificar estrutura do launcher
       - name: Verify Zalith Launcher source
@@ -179,7 +174,6 @@ jobs:
           fi
 
           source "$HOME/.cargo/env"
-
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
           rustup update stable
@@ -217,7 +211,7 @@ jobs:
           echo "Cargo NDK: $(cargo ndk --version)"
           echo "NDK configurado."
 
-      # 11. Corrigir imports e API experimental do Kotlin
+      # 11. CORREÇÃO DOS ERROS KOTLIN DO REDESIGN
       - name: Fix Kotlin Compose compilation issues
         shell: bash
         run: |
@@ -230,85 +224,107 @@ jobs:
 
           project = Path(sys.argv[1])
 
-          root = (
-              project
-              / "ZalithLauncher/src/main/java/"
-                "com/movtery/zalithlauncher/ui/screens/content/home"
-          )
+          def find_unique(filename):
+              matches = list(project.rglob(filename))
 
-          dashboard = root / "HomeDashboard.kt"
-          hero = root / "HomeHeroBanner.kt"
-
-          for file in (dashboard, hero):
-              if not file.is_file():
-                  print(f"ERRO: Arquivo não encontrado: {file}")
+              if len(matches) != 1:
+                  print(
+                      f"ERRO: esperado exatamente um arquivo "
+                      f"{filename}; encontrados: {len(matches)}"
+                  )
+                  for item in matches:
+                      print(item)
                   sys.exit(1)
 
+              return matches[0]
+
+          # CORREÇÃO 1:
+          # Remover import inválido de Modifier.weight.
+          dashboard = find_unique("HomeDashboard.kt")
           source = dashboard.read_text(encoding="utf-8")
 
-          weight_import = (
-              "import androidx.compose.foundation.layout.weight"
+          source, removed = re.subn(
+              r"(?m)^[ \t]*import[ \t]+"
+              r"androidx\.compose\.foundation\.layout\.weight"
+              r"[ \t]*\r?\n",
+              "",
+              source
           )
 
-          if weight_import not in source:
-              package_match = re.search(
-                  r"^package\s+[^\n]+\n",
-                  source,
-                  re.MULTILINE
+          dashboard.write_text(source, encoding="utf-8")
+
+          if removed:
+              print(
+                  "HomeDashboard.kt: import incorreto de weight removido."
               )
-
-              if not package_match:
-                  print("ERRO: package não encontrado em HomeDashboard.kt.")
-                  sys.exit(1)
-
-              source = (
-                  source[:package_match.end()]
-                  + "\n"
-                  + weight_import
-                  + "\n"
-                  + source[package_match.end():]
-              )
-
-              dashboard.write_text(source, encoding="utf-8")
-              print("Import weight adicionado.")
           else:
-              print("Import weight já existe.")
+              print(
+                  "HomeDashboard.kt: import incorreto de weight já estava ausente."
+              )
 
+          # CORREÇÃO 2:
+          # Autorizar ExperimentalMaterial3Api no arquivo.
+          hero = find_unique("HomeHeroBanner.kt")
           source = hero.read_text(encoding="utf-8")
-
-          optin = (
-              "@file:OptIn("
-              "androidx.compose.material3.ExperimentalMaterial3Api::class"
-              ")"
-          )
 
           if "ExperimentalMaterial3Api::class" not in source:
               package_match = re.search(
-                  r"^package\s+[^\n]+\n",
-                  source,
-                  re.MULTILINE
+                  r"(?m)^package[ \t]+[^\n]+",
+                  source
               )
 
               if not package_match:
-                  print("ERRO: package não encontrado em HomeHeroBanner.kt.")
+                  print(
+                      "ERRO: declaração package não encontrada "
+                      "em HomeHeroBanner.kt."
+                  )
                   sys.exit(1)
+
+              annotation = (
+                  "@file:OptIn("
+                  "androidx.compose.material3."
+                  "ExperimentalMaterial3Api::class"
+                  ")"
+              )
 
               source = (
                   source[:package_match.start()]
-                  + optin
-                  + "\n\n"
+                  + annotation
+                  + "\n"
                   + source[package_match.start():]
               )
 
               hero.write_text(source, encoding="utf-8")
-              print("OptIn Material 3 adicionado.")
-          else:
-              print("OptIn Material 3 já existe.")
 
-          print("Verificação Kotlin concluída.")
+              print(
+                  "HomeHeroBanner.kt: autorização Material3 adicionada."
+              )
+          else:
+              print(
+                  "HomeHeroBanner.kt: autorização Material3 já existe."
+              )
+
+          # Verificação final
+          dashboard_source = dashboard.read_text(encoding="utf-8")
+
+          if re.search(
+              r"(?m)^[ \t]*import[ \t]+"
+              r"androidx\.compose\.foundation\.layout\.weight",
+              dashboard_source
+          ):
+              print("ERRO: import incorreto de weight continua presente.")
+              sys.exit(1)
+
+          hero_source = hero.read_text(encoding="utf-8")
+
+          if "ExperimentalMaterial3Api::class" not in hero_source:
+              print("ERRO: autorização Material3 não foi aplicada.")
+              sys.exit(1)
+
+          print("As duas correções Kotlin foram verificadas.")
           PY
 
-          echo "Correções Kotlin verificadas."
+          echo "Correções Kotlin concluídas."
 
       # 12. Diagnóstico do projeto
       - name: Diagnose project configuration
@@ -333,12 +349,6 @@ jobs:
             echo "Diretórios patches:"
             find "$PROJECT_ROOT" -type d \
               -path '*/LWJGL/patches' -print
-
-            echo ""
-            echo "Arquivos de configuração:"
-            find "$PROJECT_ROOT" -maxdepth 2 \
-              \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -print
           } > "$GITHUB_WORKSPACE/project-diagnostics.txt"
 
           echo "Diagnóstico estrutural concluído."
@@ -357,6 +367,7 @@ jobs:
             --console=plain \
             tasks --all \
             > "$GITHUB_WORKSPACE/gradle-tasks.log" 2>&1; then
+
             echo "Gradle preparado."
           else
             STATUS=$?
@@ -371,7 +382,7 @@ jobs:
             exit "$STATUS"
           fi
 
-      # 14. Compilar APK Debug com captura correta de erros
+      # 14. Compilar APK com captura correta de erros
       - name: Build Zalith Launcher APK
         shell: bash
         run: |
@@ -386,7 +397,7 @@ jobs:
           LOG="$GITHUB_WORKSPACE/build.log"
 
           echo "Iniciando compilação do Zalith Launcher 2..."
-          echo "O log completo será salvo para diagnóstico."
+          echo "Log completo: build.log"
 
           if ./gradlew \
             --no-daemon \
@@ -407,35 +418,29 @@ jobs:
             echo ""
             echo "========== RESUMO DOS ERROS =========="
 
-            if ! grep -n -E \
+            grep -n -E \
               'What went wrong:|Execution failed for task|Compilation error|Unresolved reference|Type mismatch|e: file://|error:|\.kt:[0-9]+:[0-9]+' \
-              "$LOG" | tail -n 20; then
-              echo "Nenhuma mensagem de erro reconhecida no filtro."
-            fi
+              "$LOG" | tail -n 25 || true
 
             echo ""
             echo "========== CAUSA DO GRADLE =========="
 
-            if ! grep -A 10 -E \
-              'What went wrong:' "$LOG" | tail -n 15; then
-              echo "O Gradle não apresentou o bloco What went wrong."
-            fi
+            grep -A 10 -E \
+              'What went wrong:' "$LOG" | tail -n 15 || true
 
             echo ""
             echo "========== TAREFAS QUE FALHARAM =========="
 
-            if ! grep -E \
+            grep -E \
               '^> Task .* FAILED|Execution failed for task' \
-              "$LOG" | tail -n 8; then
-              echo "A tarefa que falhou não foi identificada no resumo."
-            fi
+              "$LOG" | tail -n 10 || true
 
             echo ""
             echo "========== ÚLTIMAS LINHAS =========="
-            tail -n 20 "$LOG"
+            tail -n 25 "$LOG"
 
             echo ""
-            echo "LOG COMPLETO: Zalith-Build-Diagnostics"
+            echo "Consulte o artefato Zalith-Build-Diagnostics."
 
             exit "$STATUS"
           fi
@@ -460,28 +465,25 @@ jobs:
           )
 
           if [ "${#APK_FILES[@]}" -eq 0 ]; then
-            echo "::error title=APK não encontrado::A compilação terminou, mas nenhum APK Debug foi localizado."
+            echo "::error title=APK não encontrado::Nenhum APK Debug foi localizado."
             exit 1
           fi
 
           for APK in "${APK_FILES[@]}"; do
-            echo "APK encontrado: $APK"
-
             DEST="$GITHUB_WORKSPACE/final-apk/$(basename "$APK")"
 
             if [ -e "$DEST" ]; then
-              echo "::error title=APK duplicado::Dois APKs possuem o mesmo nome: $(basename "$APK")"
+              echo "::error title=APK duplicado::Dois APKs possuem o mesmo nome."
               exit 1
             fi
 
             cp "$APK" "$DEST"
           done
 
-          echo ""
           echo "APKs gerados:"
           ls -lh "$GITHUB_WORKSPACE/final-apk"
 
-      # 16. Enviar APK como artefato - Node.js 24
+      # 16. Enviar APK como artefato
       - name: Upload Zalith Launcher APK
         uses: actions/upload-artifact@v6
         with:
@@ -490,7 +492,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 17. Enviar diagnósticos em caso de falha - Node.js 24
+      # 17. Enviar diagnósticos em caso de falha
       - name: Upload build diagnostics
         if: failure()
         uses: actions/upload-artifact@v6
