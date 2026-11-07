@@ -1,3 +1,4 @@
+
 name: Zalith Launcher 2 - Build APK
 
 on:
@@ -21,35 +22,25 @@ jobs:
       ANDROID_PLATFORM: "android-35"
       ANDROID_BUILD_TOOLS: "35.0.0"
       ANDROID_NDK_VERSION: "25.2.9519653"
-      PROJECT_DIR: "ZalithLauncher"
 
     steps:
-      # 1. Baixar o repositório
+      # 1. Checkout
       - name: 1 - Checkout do repositório
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # 2. Instalar ferramentas do sistema
+      # 2. Dependências Linux
       - name: 2 - Instalar dependências Linux
         shell: bash
         run: |
           set -eux
           sudo apt-get update
           sudo apt-get install -y \
-            unzip \
-            zip \
-            python3 \
-            python3-pip \
-            findutils \
-            file \
-            curl \
-            wget \
-            git \
-            build-essential \
-            pkg-config
+            unzip zip python3 findutils file \
+            curl wget git build-essential pkg-config
 
-      # 3. Localizar e extrair o projeto
+      # 3. Extrair arquivos do projeto
       - name: 3 - Localizar e extrair arquivos Zalith
         shell: bash
         run: |
@@ -59,57 +50,126 @@ jobs:
 
           ZIP_FILE=""
 
-          if [ -f "ZalithLauncher2-corrigido.zip" ]; then
-            ZIP_FILE="ZalithLauncher2-corrigido.zip"
-          else
-            ZIP_FILE="$(find . -maxdepth 3 -type f \
-              -iname 'Zali*.zip' \
+          ZIP_FILE="$(find . -maxdepth 4 -type f \
+            -iname 'Zali*.zip' \
+            ! -path './extracted/*' \
+            | head -n 1 || true)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            ZIP_FILE="$(find . -maxdepth 4 -type f \
+              -iname '*.zip' \
               ! -path './extracted/*' \
               | head -n 1 || true)"
           fi
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "::error::Nenhum ZIP do Zalith Launcher foi encontrado."
+            echo "::error::Nenhum ZIP foi encontrado no repositório."
+            find . -maxdepth 5 -type f | head -n 300
             exit 1
           fi
 
-          echo "Arquivo encontrado: $ZIP_FILE"
+          echo "ZIP selecionado: $ZIP_FILE"
           unzip -t "$ZIP_FILE"
           unzip -oq "$ZIP_FILE" -d extracted/merged
 
-          echo "Arquivos extraídos:"
-          find extracted/merged -maxdepth 3 -type f | head -n 100
+          # Extrair ZIPs internos, se existirem.
+          for ROUND in 1 2 3; do
+            mapfile -t INNER_ZIPS < <(
+              find extracted/merged -type f -iname '*.zip'
+            )
 
-      # 4. Encontrar a raiz Gradle
-      - name: 4 - Localizar projeto Gradle
+            [ "${#INNER_ZIPS[@]}" -gt 0 ] || break
+
+            for INNER in "${INNER_ZIPS[@]}"; do
+              DEST="${INNER%.zip}_extracted"
+
+              if [ ! -d "$DEST" ]; then
+                mkdir -p "$DEST"
+                echo "Extraindo ZIP interno: $INNER"
+                unzip -oq "$INNER" -d "$DEST"
+              fi
+            done
+          done
+
+          echo "===== ESTRUTURA EXTRAÍDA ====="
+          find extracted/merged -maxdepth 6 -type f \
+            | head -n 400
+
+      # 4. Localizar raiz Gradle
+      - name: 4 - Localizar raiz do projeto Gradle
         shell: bash
         run: |
           set -euo pipefail
 
+          SEARCH_ROOT="$(realpath extracted/merged)"
           ROOT=""
 
-          if [ -f "extracted/merged/gradlew" ]; then
-            ROOT="extracted/merged"
-          else
-            ROOT="$(find extracted/merged -type f -name gradlew \
-              -printf '%h\n' | head -n 1 || true)"
+          echo "Procurando projeto em: $SEARCH_ROOT"
+
+          # Primeira tentativa: Gradle Wrapper.
+          ROOT="$(find "$SEARCH_ROOT" -type f \
+            -name gradlew \
+            -not -path '*/.gradle/*' \
+            -printf '%h\n' \
+            | head -n 1 || true)"
+
+          # Segunda tentativa: settings.gradle.
+          if [ -z "$ROOT" ]; then
+            ROOT="$(find "$SEARCH_ROOT" -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path '*/.gradle/*' \
+              -printf '%h\n' \
+              | head -n 1 || true)"
           fi
 
+          # Terceira tentativa: módulo ZalithLauncher.
           if [ -z "$ROOT" ]; then
-            ROOT="$(find extracted/merged -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -printf '%h\n' | head -n 1 || true)"
+            MODULE="$(find "$SEARCH_ROOT" -type d \
+              -name ZalithLauncher \
+              -not -path '*/.gradle/*' \
+              | head -n 1 || true)"
+
+            if [ -n "$MODULE" ]; then
+              ROOT="$(dirname "$MODULE")"
+            fi
+          fi
+
+          # Quarta tentativa: build.gradle.
+          if [ -z "$ROOT" ]; then
+            ROOT="$(find "$SEARCH_ROOT" -type f \
+              \( -name build.gradle -o -name build.gradle.kts \) \
+              -not -path '*/.gradle/*' \
+              -printf '%h\n' \
+              | head -n 1 || true)"
           fi
 
           if [ -z "$ROOT" ]; then
             echo "::error::Não foi possível localizar a raiz Gradle."
+
+            echo "===== ARQUIVOS ENCONTRADOS ====="
+            find "$SEARCH_ROOT" -maxdepth 8 -type f \
+              | head -n 500
+
+            echo "===== PASTAS ENCONTRADAS ====="
+            find "$SEARCH_ROOT" -maxdepth 7 -type d \
+              | head -n 300
+
+            echo "===== ARQUIVOS GRADLE ====="
+            find "$SEARCH_ROOT" -type f \
+              \( -name gradlew \
+              -o -name settings.gradle \
+              -o -name settings.gradle.kts \
+              -o -name build.gradle \
+              -o -name build.gradle.kts \)
+
             exit 1
           fi
 
           ROOT="$(realpath "$ROOT")"
-
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Raiz Gradle: $ROOT"
+
+          echo "===== RAIZ ENCONTRADA ====="
+          echo "$ROOT"
           ls -la "$ROOT"
 
       # 5. Verificar módulo principal
@@ -119,6 +179,7 @@ jobs:
           set -euo pipefail
 
           ROOT="$PROJECT_ROOT"
+          MODULE=""
 
           if [ -d "$ROOT/ZalithLauncher/src" ]; then
             MODULE="$ROOT/ZalithLauncher"
@@ -133,37 +194,34 @@ jobs:
 
           if [ -z "$MODULE" ]; then
             echo "::error::Módulo ZalithLauncher/src não encontrado."
-            find "$ROOT" -maxdepth 4 -type d | head -n 200
+            find "$ROOT" -maxdepth 5 -type d | head -n 300
             exit 1
           fi
 
           echo "MODULE_DIR=$MODULE" >> "$GITHUB_ENV"
           echo "Módulo encontrado: $MODULE"
-          find "$MODULE/src" -maxdepth 3 -type d | head -n 80
 
-      # 6. Instalar Java 17
+      # 6. Java 17
       - name: 6 - Configurar Java 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
 
-      # 7. Instalar Android SDK
+      # 7. Android SDK
       - name: 7 - Configurar Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
-      # 8. Aceitar licenças
+      # 8. Licenças
       - name: 8 - Aceitar licenças Android
         shell: bash
         run: |
           set -euo pipefail
-
           yes | sdkmanager --licenses || true
-
           sdkmanager --list_installed
 
-      # 9. Instalar plataforma, build-tools e NDK
+      # 9. Plataformas e NDK
       - name: 9 - Instalar Android Platform e NDK
         shell: bash
         run: |
@@ -175,16 +233,13 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;25.2.9519653"
 
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653" \
             >> "$GITHUB_ENV"
 
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.2.9519653" \
             >> "$GITHUB_ENV"
 
-      # 10. Configurar Rust para Android
+      # 10. Rust para Android
       - name: 10 - Instalar Rust e cargo-ndk
         shell: bash
         run: |
@@ -192,8 +247,7 @@ jobs:
 
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf \
-              https://sh.rustup.rs \
-              | sh -s -- -y
+              https://sh.rustup.rs | sh -s -- -y
           fi
 
           source "$HOME/.cargo/env"
@@ -214,7 +268,7 @@ jobs:
           cargo --version
           cargo ndk --version
 
-      # 11. Corrigir fontes Kotlin
+      # 11. Corrigir Kotlin
       - name: 11 - Corrigir ColumnScope e Material3 Expressive
         shell: bash
         run: |
@@ -222,37 +276,33 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
+          import os
           import re
           import sys
 
-          root = Path(__import__("os").environ["MODULE_DIR"])
+          root = Path(os.environ["MODULE_DIR"])
+          source_root = root / "src/main"
 
-          dashboard = root / "src/main/java"
-          hero = root / "src/main/java"
+          dashboards = list(source_root.rglob("HomeDashboard.kt"))
+          heroes = list(source_root.rglob("HomeHeroBanner.kt"))
 
-          dashboard_files = list(dashboard.rglob("HomeDashboard.kt"))
-          hero_files = list(hero.rglob("HomeHeroBanner.kt"))
-
-          if not dashboard_files:
+          if not dashboards:
               print("ERRO: HomeDashboard.kt não encontrado.")
               sys.exit(1)
 
-          if not hero_files:
+          if not heroes:
               print("ERRO: HomeHeroBanner.kt não encontrado.")
               sys.exit(1)
 
-          # Corrigir HomeDashboard.kt
-          for path in dashboard_files:
+          for path in dashboards:
               source = path.read_text(encoding="utf-8")
 
-              # Remover import inválido de Modifier.weight.
               source = re.sub(
                   r"(?m)^\s*import\s+androidx\.compose\.foundation\.layout\.weight\s*\n",
                   "",
                   source
               )
 
-              # Adicionar ColumnScope.
               if "import androidx.compose.foundation.layout.ColumnScope" not in source:
                   imports = list(re.finditer(r"(?m)^import .+$", source))
 
@@ -278,38 +328,31 @@ jobs:
                               + source
                           )
 
-              # Localizar a declaração SectionCard e corrigir o tipo
-              # do lambda content para permitir Modifier.weight().
-              match = re.search(
-                  r"\bfun\s+SectionCard\s*\(",
-                  source
-              )
+              match = re.search(r"\bfun\s+SectionCard\s*\(", source)
 
               if not match:
-                  print(f"AVISO: SectionCard não encontrada em {path}")
-                  path.write_text(source, encoding="utf-8")
-                  continue
-
-              start = match.start()
-              open_paren = source.find("(", match.start())
-
-              depth = 0
-              close_paren = -1
-
-              for index in range(open_paren, len(source)):
-                  if source[index] == "(":
-                      depth += 1
-                  elif source[index] == ")":
-                      depth -= 1
-                      if depth == 0:
-                          close_paren = index
-                          break
-
-              if close_paren == -1:
-                  print(f"ERRO: parâmetros de SectionCard inválidos em {path}")
+                  print(f"ERRO: declaração SectionCard não encontrada: {path}")
                   sys.exit(1)
 
-              declaration = source[start:close_paren + 1]
+              start = match.start()
+              opening = source.find("(", match.start())
+              depth = 0
+              closing = -1
+
+              for i in range(opening, len(source)):
+                  if source[i] == "(":
+                      depth += 1
+                  elif source[i] == ")":
+                      depth -= 1
+                      if depth == 0:
+                          closing = i
+                          break
+
+              if closing < 0:
+                  print(f"ERRO: parâmetros de SectionCard inválidos: {path}")
+                  sys.exit(1)
+
+              declaration = source[start:closing + 1]
 
               corrected = re.sub(
                   r"content\s*:\s*@Composable\s*\(\s*\)\s*->\s*Unit",
@@ -317,46 +360,28 @@ jobs:
                   declaration
               )
 
-              if corrected == declaration:
-                  corrected = re.sub(
-                      r"content\s*:\s*@Composable\s*\{\s*\}\s*->\s*Unit",
-                      "content: @Composable ColumnScope.() -> Unit",
-                      declaration
-                  )
+              if corrected == declaration and "ColumnScope.() -> Unit" not in declaration:
+                  print("ERRO: formato do parâmetro content não reconhecido.")
+                  print(declaration)
+                  sys.exit(1)
 
-              if corrected == declaration:
-                  if "ColumnScope.() -> Unit" not in declaration:
-                      print(
-                          "ERRO: não foi possível identificar o parâmetro "
-                          "content de SectionCard."
-                      )
-                      print(declaration)
-                      sys.exit(1)
-
-              source = (
-                  source[:start]
-                  + corrected
-                  + source[close_paren + 1:]
-              )
-
+              source = source[:start] + corrected + source[closing + 1:]
               path.write_text(source, encoding="utf-8")
               print(f"Corrigido: {path}")
 
-          # Corrigir HomeHeroBanner.kt
-          for path in hero_files:
+          for path in heroes:
               source = path.read_text(encoding="utf-8")
 
-              expressive_optin = (
-                  "@file:OptIn("
-                  "androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class"
-                  ")"
-              )
-
-              # Retirar opt-in antigo incorreto, se existir.
               source = re.sub(
                   r"(?m)^@file:OptIn\(androidx\.compose\.material3\.ExperimentalMaterial3Api::class\)\s*\n?",
                   "",
                   source
+              )
+
+              annotation = (
+                  "@file:OptIn("
+                  "androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class"
+                  ")"
               )
 
               if "ExperimentalMaterial3ExpressiveApi" not in source:
@@ -365,33 +390,30 @@ jobs:
                   if package:
                       pos = package.end()
                       source = (
-                          source[:pos]
-                          + "\n\n"
-                          + expressive_optin
-                          + source[pos:]
+                          source[:pos] + "\n\n" + annotation + source[pos:]
                       )
                   else:
-                      source = expressive_optin + "\n\n" + source
+                      source = annotation + "\n\n" + source
 
               path.write_text(source, encoding="utf-8")
-              print(f"Opt-in Material3 Expressive corrigido: {path}")
+              print(f"Opt-in corrigido: {path}")
 
-          print("Verificação das correções concluída.")
+          print("Correções Kotlin concluídas.")
           PY
 
-      # 12. Diagnóstico do projeto
+      # 12. Diagnóstico
       - name: 12 - Diagnóstico dos módulos e LWJGL
         shell: bash
         run: |
           set -euo pipefail
 
           echo "===== MÓDULOS GRADLE ====="
-          find "$PROJECT_ROOT" -maxdepth 4 \
+          find "$PROJECT_ROOT" -maxdepth 5 \
             \( -name build.gradle -o -name build.gradle.kts \) \
             -print
 
           echo "===== CONFIGURAÇÃO GRADLE ====="
-          find "$PROJECT_ROOT" -maxdepth 3 \
+          find "$PROJECT_ROOT" -maxdepth 5 \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
             -print
 
@@ -408,15 +430,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          chmod +x ./gradlew
-
-          java -version
-          ./gradlew --version
-
           mkdir -p ../build-logs
 
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            GRADLE="./gradlew"
+          else
+            echo "Gradle Wrapper ausente. Instalando Gradle para diagnóstico."
+            sudo apt-get update
+            sudo apt-get install -y gradle
+            GRADLE="gradle"
+          fi
+
+          java -version
+          $GRADLE --version
+
           set +e
-          ./gradlew tasks --all \
+          $GRADLE tasks --all \
             --no-daemon \
             --stacktrace \
             2>&1 | tee ../build-logs/gradle-tasks.log
@@ -429,7 +459,9 @@ jobs:
             exit "$STATUS"
           fi
 
-      # 14. Compilar APK Debug
+          echo "GRADLE_COMMAND=$GRADLE" >> "$GITHUB_ENV"
+
+      # 14. Compilar APK
       - name: 14 - Compilar Zalith Launcher 2
         shell: bash
         working-directory: ${{ env.PROJECT_ROOT }}
@@ -438,10 +470,10 @@ jobs:
 
           mkdir -p ../build-logs
 
-          echo "Iniciando compilação do APK..."
+          GRADLE="${GRADLE_COMMAND:-./gradlew}"
 
           set +e
-          ./gradlew :ZalithLauncher:assembleDebug \
+          $GRADLE :ZalithLauncher:assembleDebug \
             --no-daemon \
             --stacktrace \
             --info \
@@ -453,7 +485,6 @@ jobs:
           if [ "$STATUS" -ne 0 ]; then
             echo "::error::A compilação do APK falhou."
 
-            echo "===== ERROS KOTLIN E GRADLE ====="
             grep -n -i -E \
               'error:|e: |failed|exception|unresolved reference' \
               ../build-logs/assemble-debug.log \
@@ -464,7 +495,7 @@ jobs:
 
           echo "Compilação concluída."
 
-      # 15. Localizar e preparar APK
+      # 15. Encontrar APK
       - name: 15 - Localizar APK gerado
         shell: bash
         run: |
@@ -472,52 +503,43 @@ jobs:
 
           mkdir -p final-apk
 
-          APK_FILES="$(find "$PROJECT_ROOT" \
+          find "$PROJECT_ROOT" \
             -type f \
             -name '*.apk' \
             -path '*/build/outputs/apk/*' \
-            -print)"
+            -print0 |
+          while IFS= read -r -d '' APK; do
+            NAME="$(basename "$APK")"
+            cp "$APK" "final-apk/$NAME"
+            echo "APK copiado: $NAME"
+            sha256sum "final-apk/$NAME"
+          done
 
-          if [ -z "$APK_FILES" ]; then
+          if ! find final-apk -type f -name '*.apk' | grep -q .; then
             echo "::error::Nenhum APK foi encontrado."
-            find "$PROJECT_ROOT" -type f -name '*.apk' -print
             exit 1
           fi
 
-          while IFS= read -r APK; do
-            [ -z "$APK" ] && continue
-
-            NAME="$(basename "$APK")"
-            DEST="final-apk/$NAME"
-
-            cp "$APK" "$DEST"
-
-            echo "APK copiado: $DEST"
-            ls -lh "$DEST"
-            sha256sum "$DEST"
-          done <<< "$APK_FILES"
-
-          echo "===== APKs FINAIS ====="
           ls -lh final-apk/
 
       # 16. Publicar APK
       - name: 16 - Enviar APK como artefato
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: Zalith-Launcher-2-APK-Debug
           path: final-apk/*.apk
           if-no-files-found: error
           retention-days: 14
 
-      # 17. Publicar diagnósticos mesmo em caso de falha
+      # 17. Diagnósticos
       - name: 17 - Salvar logs de diagnóstico
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: Zalith-Build-Diagnostics
           path: |
             build-logs/
-            ${{ env.PROJECT_ROOT }}/build/reports/
-            ${{ env.PROJECT_ROOT }}/build/outputs/logs/
+            extracted/merged/
           if-no-files-found: ignore
           retention-days: 7
+          
