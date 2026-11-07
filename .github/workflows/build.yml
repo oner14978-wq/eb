@@ -1,14 +1,7 @@
 name: Build Zalith Launcher 2 APK
 
-# ---------------------------------------------------------------------------
-# Compila o Zalith Launcher 2 a partir dos 22 pacotes ZIP guardados no
-# repositório (Zali-03.zip ... ZalithLa-19.zip), verifica tudo antes e depois
-# de corrigir, e publica o APK como Artifact da execução.
-#
-# Os pacotes NÃO são extraídos dentro do repositório: vão para
-# /home/runner/zalith-src, então os workflows internos dos ZIPs
-# (.github/workflows/*) nunca ficam ativos nem conflitam com este arquivo.
-# ---------------------------------------------------------------------------
+# Zalith Launcher 2: verifica os 22 ZIPs, corrige e compila o APK (Artifact).
+# Os ZIPs são extraídos em /home/runner/zalith-src, fora do repositório.
 
 on:
   workflow_dispatch:
@@ -56,7 +49,6 @@ jobs:
       CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
 
     steps:
-      # ---------------------------------------------------------------- 0
       - name: Checkout do repositório
         uses: actions/checkout@v6
         with:
@@ -70,7 +62,6 @@ jobs:
           : > "$REPORT_DIR/fixed.txt"
           df -h / | tail -1
 
-      # ---------------------------------------------------------------- 1
       - name: "Verificação 1/4 - localizar e testar os arquivos ZIP"
         run: |
           set -uo pipefail
@@ -148,178 +139,76 @@ jobs:
           echo "----- conteúdo de $(basename "$f") -----"
           find /tmp/leiame -type f -exec sh -c 'echo "## $1"; head -c 4000 "$1"; echo' _ {} \;
 
-      # ---------------------------------------------------------------- 2
       - name: "Verificação 2/4 - extrair para estrutura organizada e detectar conflitos"
         run: |
-          python3 - <<'PY'
-          import os, sys, zipfile, collections
-          src = os.environ["SRC_ROOT"]; rep = os.environ["REPORT_DIR"]
-          zips = [l.strip() for l in open(f"{rep}/zips.txt") if l.strip()]
-          zips.sort(key=lambda p: os.path.basename(p))
-          owners = collections.defaultdict(list)
-          for z in zips:
-              with zipfile.ZipFile(z) as zf:
-                  for i in zf.infolist():
-                      if i.is_dir() or i.filename.startswith("__MACOSX/"):
-                          continue
-                      owners[i.filename].append((z, i.CRC, i.file_size))
-          unsafe = [n for n in owners if n.startswith("/") or ".." in n.split("/")]
-          if unsafe:
-              print("::error::Caminhos inseguros nos ZIPs:", unsafe[:5]); sys.exit(1)
-          same = {n: v for n, v in owners.items() if len(v) > 1 and len({c for _, c, _ in v}) == 1}
-          diff = {n: v for n, v in owners.items() if len({c for _, c, _ in v}) > 1}
-          lower = collections.defaultdict(set)
-          for n in owners: lower[n.lower()].add(n)
-          case = {k: v for k, v in lower.items() if len(v) > 1}
-          print(f"arquivos únicos: {len(owners)} | duplicados idênticos: {len(same)} | "
-                f"conflitos de conteúdo: {len(diff)} | colisões de maiúsculas: {len(case)}")
-          with open(f"{rep}/problems.txt", "a") as pf, open(f"{rep}/fixed.txt", "a") as ff:
-              for n, v in list(diff.items())[:50]:
-                  msg = f"Conflito de conteúdo em {n}: " + ", ".join(os.path.basename(z) for z, _, _ in v)
-                  print("::warning::" + msg + " -> prevalece o último pacote (ordem alfabética)")
-                  pf.write(msg + "\n"); ff.write(f"Conflito {n}: mantido o do último pacote\n")
-              for k, v in case.items():
-                  pf.write(f"Colisão de maiúsculas/minúsculas: {sorted(v)}\n")
-          total = 0
-          for z in zips:
-              with zipfile.ZipFile(z) as zf:
-                  for i in zf.infolist():
-                      if i.filename.startswith("__MACOSX/"):
-                          continue
-                      dest = os.path.join(src, i.filename)
-                      if i.is_dir():
-                          os.makedirs(dest, exist_ok=True); continue
-                      os.makedirs(os.path.dirname(dest), exist_ok=True)
-                      with zf.open(i) as r, open(dest, "wb") as w:
-                          while True:
-                              b = r.read(1 << 20)
-                              if not b: break
-                              w.write(b)
-                      mode = (i.external_attr >> 16) & 0o777
-                      if mode: os.chmod(dest, mode)
-                      total += 1
-          print(f"extraídos {total} arquivos para {src}")
-          open(os.environ["GITHUB_ENV"], "a").write(f"FILES_EXTRACTED={total}\n")
-          PY
+          base64 -d <<'B64' | gunzip | python3 -
+          H4sIAAAAAAACA71WUW8jNRB+z68Y7QNa65ZtiwSV9i6VjlwPKgE9pQGdrkQrZ9duTXbtxXaSXkp+
+          DU8g8chLX/PHmPFu0iQtSEgIS2026/E338x8M46qG2M9GJeA+4j/lqqRqhIJFKaqROGV0a7nbAF9
+          tEmFnitr9HV0NRzkw8vLUTR+CVY0B7vD83eXw1H+5mIYjXuI6HD/ukqdt6qJGUhjoQKlwTRCxzK6
+          R4TVEdml/s5HDJSErXULkDpkGU/Fx37F60nJocnIY8P9bTrhTmhei7hhrGcWWljyt8M/LYXks8qX
+          qvBxpZxnPaKwJAoEnvUA10L520346QfVvMXPeMmAO1jK1oQWnVThpEyVlobwYva4Twv5q1S5vFQW
+          w6UDKaESSQyLW+/IWRzl+bevB5dX74+iAwBahdFe6ZnY22jDu37EG6e8wSyWcbxM0M1gOEg6b7lT
+          S4EZmWnHpaAK6EBeh8y3aUKieo8RMiG+UZpGZIabTaV8eD/uoXUL1pJtrNK4lWXCWmOzbMBrpW8N
+          omonbmYWnzT+fbh457Io6Y5eZ5+P2UvSWiruEPmE9RyGgfTudQbzlmGCD1uSqfKidnGrCtTLnMEZ
+          nADXZfh6X4QzOSo2gZyOzVcM+n04WfVKJeW/QH4e6oyQKrMQ9h9U5UQnqp3sZhBOXes0fKKUU16W
+          sWa9AhVLvKYbXtOOVzB8PuBVr823jLj9eabmmNn1g1aFQT/3ZNY6ZSv4BcoZVq3gJdWiXP+OOno0
+          o2wHo6gTloxQaRKrjNalCLIT64fSdPaUw2BfkNTXf4pgVXO1fnDFrOIbXIqJrSLWC32019mNNZMK
+          QwrdnUDEo9BVjUz27aS6E+WBkexab7d6oeWI1yZTDFV1PH5sodrdYHplNOgC24sLRI2KWGUQwQsg
+          T+lPRmH6DqfJsh1U2Fb5Rg1s62Gr/QW3WumbLCM08ouY8OkZGog5R6kIMFinyqvaQMML4wXExpbI
+          gVeST9a/YW04i3aQZbqwGFfcgf2oI+wXuXm7E1QIouZYXQwKYzx0RCe3udsojMq0SVv21CnBU5l/
+          NQdVPsLe3qk4jWNRojRXwYs3nleY8uP/Y7D+R6O0FM6391aoexABXnTJjgf291P9qRMEqvlU4K6L
+          CTsBHHDO52baH9mZwCI+P9F3jm244JcgQYJhhzh7p9vcyjT0kQo5tV1XtRyixaRtpMVTxotbjBMI
+          9OkerQmmx6ZW8DI+gVev4LNj9qwd3SLGwySDCRpPn7VZdAKb7EPUpqRJGCu8DbzAqKuce2/hDCfe
+          Fww+gWNzenp6WAY6Fe7/4hYfu0jp5T54q8oXeBVsZyd6sXz9B03G+7C9gu04bbjlqGxb0BQLKdz9
+          TfPVxejr77/Mz7/7IRq342nbMm8vvjm/ys/fj4avB6PzN/0OOXTGXz8veqhgCQAA
+          B64
 
-      # ---------------------------------------------------------------- 3
       - name: "Verificação 3/4 - identificar a estrutura real do projeto Android"
         run: |
-          python3 - <<'PY'
-          import os, re, sys, glob
-          src = os.environ["SRC_ROOT"]; rep = os.environ["REPORT_DIR"]
-          SKIP = {"build", ".gradle", ".git", "node_modules", ".cxx", "target"}
-          def walk(base):
-              for d, ds, fs in os.walk(base):
-                  ds[:] = [x for x in ds if x not in SKIP]
-                  yield d, fs
-          # settings.gradle(.kts) mais raso
-          cands = []
-          for d, fs in walk(src):
-              for n in ("settings.gradle.kts", "settings.gradle"):
-                  if n in fs: cands.append((d.count(os.sep), os.path.join(d, n)))
-          if not cands:
-              print("::error::Nenhum settings.gradle(.kts) encontrado após a extração."); sys.exit(1)
-          cands.sort(); settings = cands[0][1]; proj = os.path.dirname(settings)
-          if len(cands) > 1:
-              print("::notice::Vários settings.gradle encontrados; usando o mais raso:", settings)
-          print("PROJECT_DIR =", proj)
-          def read(p):
-              return open(p, encoding="utf-8", errors="ignore").read()
-          stext = read(settings)
-          # módulos
-          paths = []
-          for line in stext.splitlines():
-              s = line.strip()
-              if re.match(r"include\b", s):
-                  paths += re.findall(r"""["'](:?[^"']+)["']""", s)
-          paths = [p if p.startswith(":") else ":" + p for p in paths]
-          overrides = {}
-          for line in stext.splitlines():
-              m = re.search(r"""project\(\s*["'](:[^"']+)["']\s*\)\.projectDir\s*=.*?["']([^"']+)["']\s*\)?\s*$""", line.strip())
-              if m: overrides[m.group(1)] = m.group(2)
-          modules = {}
-          for p in dict.fromkeys(paths):
-              modules[p] = overrides.get(p, p.strip(":").replace(":", "/"))
-          print(f"módulos declarados: {len(modules)}")
-          app = []; missing = []
-          for p, rel in modules.items():
-              d = os.path.join(proj, rel)
-              bf = [f for f in ("build.gradle.kts", "build.gradle") if os.path.isfile(os.path.join(d, f))]
-              if not os.path.isdir(d) or not bf:
-                  missing.append(f"{p} -> {rel}"); print("  FALTA", p, rel); continue
-              t = read(os.path.join(d, bf[0]))
-              kind = "app" if re.search(r"com\.android\.application|android\.application", t) else \
-                     "lib" if re.search(r"com\.android\.library|android\.library", t) else "jvm/outro"
-              if kind == "app": app.append((p, rel, os.path.join(d, bf[0])))
-              print(f"  {p:28s} {rel:20s} {kind}")
-          if missing:
-              open(f"{rep}/problems.txt", "a").write("Módulos sem diretório/build file: " + "; ".join(missing) + "\n")
-              print("::error::Módulos declarados mas ausentes:", missing); sys.exit(1)
-          if not app:
-              print("::error::Nenhum módulo com plugin com.android.application."); sys.exit(1)
-          if len(app) > 1: print("::warning::Mais de um módulo application; usando", app[0][0])
-          app_path, app_dir, app_build = app[0]
-          # wrapper
-          gradlew = os.path.join(proj, "gradlew")
-          wp = os.path.join(proj, "gradle/wrapper/gradle-wrapper.properties")
-          wj = os.path.join(proj, "gradle/wrapper/gradle-wrapper.jar")
-          for label, f in (("gradlew", gradlew), ("gradle-wrapper.properties", wp), ("gradle-wrapper.jar", wj)):
-              if not os.path.isfile(f):
-                  print(f"::error::{label} ausente em {proj}"); sys.exit(1)
-          gv = re.search(r"gradle-([0-9][0-9.]*)-", read(wp)); gv = gv.group(1) if gv else "?"
-          # AGP
-          agp = None
-          toml = os.path.join(proj, "gradle/libs.versions.toml")
-          if os.path.isfile(toml):
-              m = re.search(r'^agp\s*=\s*"([^"]+)"', read(toml), re.M); agp = m and m.group(1)
-          if not agp:
-              for d, fs in walk(proj):
-                  for f in fs:
-                      if f.startswith("build.gradle"):
-                          m = re.search(r"com\.android\.tools\.build:gradle:([0-9.]+)", read(os.path.join(d, f)))
-                          if m: agp = m.group(1)
-          maj = lambda v: int(re.match(r"\d+", v or "0").group(0))
-          main_jdk = 21 if (maj(gv) >= 9 or maj(agp) >= 9) else 17
-          # toolchains exigidos pelos módulos
-          tool = set()
-          for d, fs in walk(proj):
-              for f in fs:
-                  if f.startswith("build.gradle"):
-                      tool |= {int(x) for x in re.findall(r"JavaLanguageVersion\.of\((\d+)\)", read(os.path.join(d, f)))}
-          jdks = sorted(tool - {main_jdk}) + [main_jdk]
-          app_text = read(app_build)
-          ndk = re.search(r'ndkVersion\s*=\s*"([^"]+)"', app_text)
-          mk = re.search(r'ndkBuild\s*\{\s*path\s*=\s*file\("([^"]+)"\)', app_text, re.S)
-          has_rust = bool(glob.glob(os.path.join(proj, "**/Cargo.toml"), recursive=True))
-          # contagem de fontes/recursos
-          cnt = {"kt": 0, "java": 0, "xml": 0, "res_dirs": 0}
-          for d, fs in walk(proj):
-              if os.path.basename(d) == "res" and "src" in d: cnt["res_dirs"] += 1
-              for f in fs:
-                  e = f.rsplit(".", 1)[-1]
-                  if e in cnt: cnt[e] += 1
-          print(f"Kotlin={cnt['kt']} Java={cnt['java']} XML={cnt['xml']} pastas res={cnt['res_dirs']}")
-          if cnt["kt"] == 0 or cnt["xml"] == 0:
-              print("::error::Projeto sem Kotlin/XML - estrutura inesperada."); sys.exit(1)
-          man = os.path.join(proj, app_dir, "src/main/AndroidManifest.xml")
-          if not os.path.isfile(man):
-              print("::error::AndroidManifest.xml do app ausente:", man); sys.exit(1)
-          print(f"Gradle={gv} AGP={agp} JDK principal={main_jdk} toolchains={sorted(tool)}")
-          print(f"Módulo app: {app_path} ({app_dir}) | NDK={ndk and ndk.group(1)} | ndk-build={mk and mk.group(1)} | Rust={has_rust}")
-          env = {
-              "PROJECT_DIR": proj, "APP_PATH": app_path, "APP_DIR": app_dir,
-              "GRADLE_VERSION": gv, "AGP_VERSION": agp or "?", "JDK_MAIN": str(main_jdk),
-              "NDK_VERSION": ndk.group(1) if ndk else "", "HAS_RUST": str(has_rust).lower(),
-              "NDK_MK_PATH": mk.group(1) if mk else "",
-              "MODULE_COUNT": str(len(modules)),
-          }
-          with open(os.environ["GITHUB_ENV"], "a") as g:
-              for k, v in env.items(): g.write(f"{k}={v}\n")
-              g.write("JDK_LIST<<__EOF__\n" + "\n".join(str(j) for j in jdks) + "\n__EOF__\n")
-          PY
+          base64 -d <<'B64' | gunzip | python3 -
+          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
+          B64
 
-      # ---------------------------------------------------------------- 4
       - name: "Verificação 4/4 - correção automática"
         run: |
           set -uo pipefail
@@ -362,37 +251,119 @@ jobs:
       - name: "Verificação do catálogo de dependências (libs.*)"
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          python3 - <<'PY'
-          import os, re, sys, glob
-          try:
-              import tomllib
-          except ImportError:
-              sys.exit(0)
-          t = tomllib.load(open("gradle/libs.versions.toml", "rb"))
-          norm = lambda s: s.replace("-", ".").replace("_", ".")
-          libs = {norm(k) for k in t.get("libraries", {})}
-          plugs = {norm(k) for k in t.get("plugins", {})}
-          bundles = {norm(k) for k in t.get("bundles", {})}
-          bad = []
-          for f in glob.glob("**/build.gradle*", recursive=True) + ["build.gradle.kts"]:
-              if not os.path.isfile(f): continue
-              s = open(f, encoding="utf-8", errors="ignore").read()
-              for m in re.finditer(r"libs\.plugins\.([A-Za-z0-9_.]+)", s):
-                  if not any(m.group(1) == p or m.group(1).startswith(p + ".") for p in plugs): bad.append((f, m.group(0)))
-              for m in re.finditer(r"libs\.(?!plugins|versions)([A-Za-z0-9_.]+)", s):
-                  a = m.group(1)
-                  if not (any(a == l or a.startswith(l + ".") for l in libs) or any(a.startswith(b) for b in bundles)):
-                      bad.append((f, m.group(0)))
-          print("aliases ausentes:", bad or "nenhum")
-          sys.exit(1 if bad else 0)
-          PY
+          base64 -d <<'B64' | gunzip | python3 -
+          H4sIAAAAAAACA41TsW7bMBDd9RUsJ9KxGWdrDQhFhw7dO9UxAko6yYQpkiCpNG6af++dJDtCB7ca
+          BOH43um9d0fTBx8z82nNIqxZOuNHZ31V5HjeFQwfMyGy7601VQEvNYTMvo3VrzH6OMGQqeDFZLGV
+          RWblBa+s143wAZzgXdSNhXusJvUMMRnvkiIcXzMeKy5l4XzskWx1XzWapR1LKkKwugbBNwRTXL5X
+          nuZKQS2R9kp0cZKs9ZGdmHEsqw6y4HgedTSQkPD6Jt+KYIfuJoMAxl3x1eBQ+k3GDLkydIPo/aEg
+          XEs4ilXRS/DV6r4ajG3UFMmKU/r1gJE8Q/k9DiDZHdvzJUadcuKHeSQtc56GpoLOR2VSayyIVu5Y
+          7V02boBpJChgTL5dM3C1b4zrSj7kdvMRfwg0u1Ry06EjGGPFScmRSZp70hxBtcY1JkMUkWJMj2qO
+          5lGJ/ZfND735td18elKHO4lNk5wULlRqdxY9mvBDEA+SlSULjNpfSyplHXP6afJRBPRNEx0VBFIw
+          TgqdYZ5KB3TTCPJzoW+l/A/J4vOHWfXvy+LJf6jXGN67xr9NCXKlyYwlM3rpwS49WJJEIuSII9YS
+          W02oilDzAsmFCHpuGQ/ROFw9bY1OuJ16SOAypB16of3DztyBOw493pHrBX0gE3QMNgHD6/oHHVHW
+          +wQEAAA=
+          B64
+
       - name: "Segunda verificação (após as correções)"
         run: |
           cd "$PROJECT_DIR"
           fail=0
           if ! test -x gradlew; then
             echo "::error::gradlew continua sem permissão"
-            f- name: Publicar APKs
+            fail=1
+          fi
+          for f in gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties "$APP_DIR/src/main/AndroidManifest.xml"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::arquivo ausente: $f"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "Segunda verificação FALHOU" >> "$REPORT_DIR/problems.txt"
+            exit 1
+          fi
+          echo "Segunda verificação OK"
+
+      - name: Instalar JDKs necessários
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_LIST }}
+
+      - name: Instalar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar NDK
+        if: env.NDK_VERSION != ''
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Instalar Rust (se o projeto usar)
+        if: env.HAS_RUST == 'true'
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Decidir tipos de build
+        run: |
+          debug=false; release=false
+          has_secrets=false
+          if [ -n "${STORE_PASSWORD:-}" ] && [ -n "${KEY_PASSWORD:-}" ]; then has_secrets=true; fi
+          case "$BUILD_TYPE" in
+            debug)   debug=true ;;
+            release) release=true ;;
+            both)    debug=true; release=true ;;
+            *)       debug=true; [ "$has_secrets" = "true" ] && release=true ;;
+          esac
+          if [ "$release" = "true" ] && [ "$has_secrets" != "true" ]; then
+            echo "::warning::Release pedido, mas faltam STORE_PASSWORD/KEY_PASSWORD. Release será ignorado."
+            echo "Release ignorado: secrets de assinatura ausentes" >> "$REPORT_DIR/problems.txt"
+            release=false
+          fi
+          echo "BUILD_DEBUG=$debug" >> "$GITHUB_ENV"
+          echo "BUILD_RELEASE=$release" >> "$GITHUB_ENV"
+          echo "Debug=$debug Release=$release"
+
+      - name: Compilar Debug
+        if: env.BUILD_DEBUG == 'true'
+        run: |
+          cd "$PROJECT_DIR"
+          ./gradlew "${APP_PATH}:assembleDebug" --stacktrace --no-daemon
+
+      - name: Compilar Release
+        if: env.BUILD_RELEASE == 'true'
+        run: |
+          cd "$PROJECT_DIR"
+          ./gradlew "${APP_PATH}:assembleRelease" --stacktrace --no-daemon
+
+      - name: Coletar APKs
+        if: always()
+        run: |
+          mkdir -p /tmp/apks
+          cd "$PROJECT_DIR/$APP_DIR"
+          find build/outputs/apk -type f -name '*.apk' 2>/dev/null | while read -r f; do
+            name=$(basename "$f")
+            if [ "$ARCH" != "all" ]; then
+              case "$name" in
+                *"$ARCH"*) ;;
+                *universal*) ;;
+                *) continue ;;
+              esac
+            fi
+            cp "$f" "/tmp/apks/$name"
+          done
+          ls -lh /tmp/apks || true
+          if [ -z "$(ls -A /tmp/apks 2>/dev/null)" ]; then
+            echo "::warning::Nenhum APK encontrado para a arquitetura '$ARCH'."
+          fi
+
+      - name: Publicar APKs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -420,4 +391,5 @@ jobs:
             cat "$REPORT_DIR/problems.txt" 2>/dev/null || true
             echo "### Correções automáticas"
             cat "$REPORT_DIR/fixed.txt" 2>/dev/null || true
-          } >> "$GITHUB_STEP_SUMMARY
+          } >> "$GITHUB_STEP_SUMMARY"
+          
