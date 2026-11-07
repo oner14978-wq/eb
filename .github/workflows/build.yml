@@ -320,7 +320,7 @@ jobs:
           PY
 
       # ---------------------------------------------------------------- 4
-      - name: "Correção automática + Verificação 4/4 (segunda verificação)"
+      - name: "Verificação 4/4 - correção automática"
         run: |
           set -uo pipefail
           cd "$PROJECT_DIR"
@@ -353,8 +353,16 @@ jobs:
             [ -f "$k" ] && echo "keystore OK: $k" || problem "keystore ausente: $k"
           done
 
-          # (d) aliases libs.* usados nos build files existem no catálogo
-          python3 - <<'PY' || problem "aliases libs.* ausentes no catálogo (ver log)"
+          # (e) caminho do ndk-build e fontes nativas
+          if [ -n "${NDK_MK_PATH:-}" ]; then
+            [ -f "$APP_DIR/$NDK_MK_PATH" ] && echo "Android.mk OK" || problem "Android.mk ausente: $APP_DIR/$NDK_MK_PATH"
+          fi
+          [ "$HAS_RUST" = "true" ] && { [ -f PetLib/rust/Cargo.lock ] && echo "Cargo.lock OK" || problem "Cargo.lock ausente"; }
+
+      - name: "Verificação do catálogo de dependências (libs.*)"
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          python3 - <<'PY'
           import os, re, sys, glob
           try:
               import tomllib
@@ -379,13 +387,9 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
-          # (e) caminho do ndk-build e fontes nativas
-          if [ -n "${NDK_MK_PATH:-}" ]; then
-            [ -f "$APP_DIR/$NDK_MK_PATH" ] && echo "Android.mk OK" || problem "Android.mk ausente: $APP_DIR/$NDK_MK_PATH"
-          fi
-          [ "$HAS_RUST" = "true" ] && { [ -f PetLib/rust/Cargo.lock ] && echo "Cargo.lock OK" || problem "Cargo.lock ausente"; }
-
-          # ---- segunda verificação (após correções)
-          echo "===== SEGUNDA VERIFICAÇÃO ====="
+      - name: "Segunda verificação (após as correções)"
+        run: |
+          cd "$PROJECT_DIR"
           fail=0
-          [ -x gradlew ] || { echo "::error::gradlew continua sem permissão"; fa
+          [ -x gradlew ] || { echo "::error::gradlew continua sem permissão"; fail=1; }
+          [ -f gradle
