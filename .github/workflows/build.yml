@@ -84,7 +84,7 @@ jobs:
           expected=${#ZIPS[@]}; found=0; ok=0
           : > "$REPORT_DIR/zips.txt"
 
-          find_one() {
+          find_one() { # procura na raiz e em subpastas; prefere o caminho mais curto
             find "$GITHUB_WORKSPACE" -type f -name "$1" -not -path '*/.git/*' 2>/dev/null \
               | awk '{ print length($0) "\t" $0 }' | sort -n | cut -f2-
           }
@@ -114,6 +114,7 @@ jobs:
             ok=$((ok+1))
           done
 
+          # LEIA-ME: o nome pedido é LEIA-ME.72; o arquivo real do pacote chama-se LEIA-ME.7z
           readme=""
           for cand in "LEIA-ME.72" "LEIA-ME.7z" "LEIA-ME*"; do
             r=$(find_one "$cand" | head -1); [ -n "$r" ] && { readme="$r"; break; }
@@ -200,7 +201,6 @@ jobs:
           print(f"extraídos {total} arquivos para {src}")
           open(os.environ["GITHUB_ENV"], "a").write(f"FILES_EXTRACTED={total}\n")
           PY
-
       # ---------------------------------------------------------------- 3
       - name: "Verificação 3/4 - identificar a estrutura real do projeto Android"
         run: |
@@ -212,6 +212,7 @@ jobs:
               for d, ds, fs in os.walk(base):
                   ds[:] = [x for x in ds if x not in SKIP]
                   yield d, fs
+          # settings.gradle(.kts) mais raso
           cands = []
           for d, fs in walk(src):
               for n in ("settings.gradle.kts", "settings.gradle"):
@@ -225,6 +226,7 @@ jobs:
           def read(p):
               return open(p, encoding="utf-8", errors="ignore").read()
           stext = read(settings)
+          # módulos
           paths = []
           for line in stext.splitlines():
               s = line.strip()
@@ -257,6 +259,7 @@ jobs:
               print("::error::Nenhum módulo com plugin com.android.application."); sys.exit(1)
           if len(app) > 1: print("::warning::Mais de um módulo application; usando", app[0][0])
           app_path, app_dir, app_build = app[0]
+          # wrapper
           gradlew = os.path.join(proj, "gradlew")
           wp = os.path.join(proj, "gradle/wrapper/gradle-wrapper.properties")
           wj = os.path.join(proj, "gradle/wrapper/gradle-wrapper.jar")
@@ -264,6 +267,7 @@ jobs:
               if not os.path.isfile(f):
                   print(f"::error::{label} ausente em {proj}"); sys.exit(1)
           gv = re.search(r"gradle-([0-9][0-9.]*)-", read(wp)); gv = gv.group(1) if gv else "?"
+          # AGP
           agp = None
           toml = os.path.join(proj, "gradle/libs.versions.toml")
           if os.path.isfile(toml):
@@ -276,6 +280,7 @@ jobs:
                           if m: agp = m.group(1)
           maj = lambda v: int(re.match(r"\d+", v or "0").group(0))
           main_jdk = 21 if (maj(gv) >= 9 or maj(agp) >= 9) else 17
+          # toolchains exigidos pelos módulos
           tool = set()
           for d, fs in walk(proj):
               for f in fs:
@@ -286,6 +291,7 @@ jobs:
           ndk = re.search(r'ndkVersion\s*=\s*"([^"]+)"', app_text)
           mk = re.search(r'ndkBuild\s*\{\s*path\s*=\s*file\("([^"]+)"\)', app_text, re.S)
           has_rust = bool(glob.glob(os.path.join(proj, "**/Cargo.toml"), recursive=True))
+          # contagem de fontes/recursos
           cnt = {"kt": 0, "java": 0, "xml": 0, "res_dirs": 0}
           for d, fs in walk(proj):
               if os.path.basename(d) == "res" and "src" in d: cnt["res_dirs"] += 1
@@ -320,35 +326,57 @@ jobs:
           fixed()   { echo "$1" >> "$REPORT_DIR/fixed.txt"; echo "CORRIGIDO: $1"; }
           problem() { echo "$1" >> "$REPORT_DIR/problems.txt"; echo "::warning::PROBLEMA: $1"; }
 
+          # (a) permissão de execução do wrapper (ZIP/Git podem perder o bit)
           if [ ! -x gradlew ]; then
-            problem "gradlew sem permissão de execução"
-            chmod +x gradlew && fixed "chmod +x gradlew"
+            problem "gradlew sem permissão de execução"; chmod +x gradlew && fixed "chmod +x gradlew"
           fi
 
+          # (b) foojay-resolver-convention incompatível com Gradle 9
           gmaj=${GRADLE_VERSION%%.*}
-          for s in settings.gradle.kts settings.gradle; do
-            [ -f "$s" ] || continue
-            v=$(grep -oE 'foojay-resolver-convention["'\"'\"')[:space:]]*version[[:space:]]*\(?["'\"'\"'][0-9.]+' "$s" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-            if [ -n "$v" ] && [ "$gmaj" -ge 9 ]; then
-              minor=$(echo "$v" | cut -d. -f1-2)
-              if [ "$(printf '%s\n0.10\n' "$minor" | sort -V | head -1)" != "0.10" ] && [ "$v" != "0.10.0" ]; then
-                problem "$s usa foojay-resolver-convention $v, incompatível com Gradle $GRADLE_VERSION"
-                sed -i -E "s/(foojay-resolver-convention[\"''])[:space:]]*version[[:space:]]*\(?[\"''])$v/\11.0.0/" "$s" \
-                  && fixed "foojay-resolver-convention $v -> 1.0.0 em $s (funcionalidade preservada)"
-                grep -n foojay "$s"
-              fi
-            fi
-          done
+          if [[ "$gmaj" =~ ^[0-9]+$ ]] && [ "$gmaj" -ge 9 ]; then
+            for s in settings.gradle.kts settings.gradle; do
+              [ -f "$s" ] || continue
+              python3 - "$s" "$REPORT_DIR" <<'PY'
+          import os, re, sys
 
+          path, report = sys.argv[1], sys.argv[2]
+          with open(path, encoding="utf-8") as f:
+              content = f.read()
+
+          pattern = re.compile(
+              r"(foojay-resolver-convention[^\n]*?\bversion\s*[\"'])([0-9]+(?:\.[0-9]+)+)([\"'])"
+          )
+          match = pattern.search(content)
+          if match:
+              version_text = match.group(2)
+              version = tuple(int(x) for x in version_text.split("."))
+              if version < (1, 0, 0):
+                  updated = pattern.sub(
+                      lambda m: m.group(1) + "1.0.0" + m.group(3),
+                      content,
+                      count=1,
+                  )
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(updated)
+                  with open(os.path.join(report, "problems.txt"), "a", encoding="utf-8") as f:
+                      f.write(f"{path}: foojay antigo {version_text}\n")
+                  with open(os.path.join(report, "fixed.txt"), "a", encoding="utf-8") as f:
+                      f.write(f"foojay atualizado para 1.0.0 em {path}\n")
+                  print(f"CORRIGIDO: foojay-resolver-convention {version_text} -> 1.0.0 em {path}")
+          PY
+            done
+          fi
+
+          # (c) keystores usados pelos signingConfigs
           for k in "$APP_DIR"/zalith_launcher_debug.jks "$APP_DIR"/zalith_launcher.jks; do
             [ -f "$k" ] && echo "keystore OK: $k" || problem "keystore ausente: $k"
           done
 
+          # (e) caminho do ndk-build e fontes nativas
           if [ -n "${NDK_MK_PATH:-}" ]; then
             [ -f "$APP_DIR/$NDK_MK_PATH" ] && echo "Android.mk OK" || problem "Android.mk ausente: $APP_DIR/$NDK_MK_PATH"
           fi
           [ "$HAS_RUST" = "true" ] && { [ -f PetLib/rust/Cargo.lock ] && echo "Cargo.lock OK" || problem "Cargo.lock ausente"; }
-
       - name: "Verificação do catálogo de dependências (libs.*)"
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
@@ -369,36 +397,4 @@ jobs:
               s = open(f, encoding="utf-8", errors="ignore").read()
               for m in re.finditer(r"libs\.plugins\.([A-Za-z0-9_.]+)", s):
                   if not any(m.group(1) == p or m.group(1).startswith(p + ".") for p in plugs): bad.append((f, m.group(0)))
-              for m in re.finditer(r"libs\.(?!plugins|versions)([A-Za-z0-9_.]+)", s):
-                  a = m.group(1)
-                  if not (any(a == l or a.startswith(l + ".") for l in libs) or any(a.startswith(b) for b in bundles)):
-                      bad.append((f, m.group(0)))
-          print("aliases ausentes:", bad or "nenhum")
-          sys.exit(1 if bad else 0)
-          PY
-
-      - name: "Segunda verificação (após as correções)"
-        run: |
-          cd "$PROJECT_DIR"
-          fail=0
-          if ! test -x gradlew; then
-            echo "::error::gradlew continua sem permissão"
-            fail=1
-          fi
-          for f in gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties "$APP_DIR/src/main/AndroidManifest.xml"; do
-            if [ ! -f "$f" ]; then
-              echo "::error::arquivo ausente: $f"
-              fail=1
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "Segunda verificação FALHOU" >> "$REPORT_DIR/problems.txt"
-            exit 1
-          fi
-          echo "Segunda verificação OK"
-
-      - name: Instalar JDKs necessários
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-        
+              for m in re.fi
