@@ -761,7 +761,22 @@ jobs:
           name: Zalith-Launcher-2-APK
           path: /tmp/apks/*.apk
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 30 
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+              for key, value in env.items():
+                  value = str(value).replace("\n", "").replace("\r", "")
+                  f.write(f"{key}={value}\n")
+
+          print("Projeto Android identificado com sucesso.")
+          print("Raiz Gradle:", proj)
+          print("Módulo Android:", app_path)
+          print("JDK:", main_jdk)
+          PY
+
+      # ---------------------------------------------------------------------
+      # 4. COMPILAÇÃO
+      # ---------------------------------------------------------------------
+      
           
           
               
