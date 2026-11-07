@@ -702,5 +702,33 @@ jobs:
           print("NDK:", ndk.group(1) if ndk else "não declarado")
           print("Rust:", has_rust)
 
+          
           env = {
-              "PROJECT_DIR":
+              "PROJECT_DIR": proj,
+              "APP_DIR": app_dir,
+              "APP_PATH": app_path,
+              "APP_BUILD_FILE": app_build,
+              "GRADLE_VERSION": gv,
+              "AGP_VERSION": agp or "",
+              "JDK_MAIN": str(main_jdk),
+              "JAVA_TOOLCHAINS": ",".join(map(str, sorted(tool))),
+              "NDK_VERSION": ndk.group(1) if ndk else "",
+              "HAS_RUST": str(has_rust).lower(),
+              "ANDROID_MANIFEST": manifest,
+              "KOTLIN_FILES": str(cnt["kt"]),
+              "JAVA_FILES": str(cnt["java"]),
+              "XML_FILES": str(cnt["xml"])
+          }
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+              for key, value in env.items():
+                  value = str(value).replace("\n", "").replace("\r", "")
+                  f.write(f"{key}={value}\n")
+
+          print("Projeto Android identificado com sucesso.")
+          print("Raiz Gradle:", proj)
+          print("Módulo Android:", app_path)
+          print("JDK:", main_jdk)
+          PY
+          
+              
