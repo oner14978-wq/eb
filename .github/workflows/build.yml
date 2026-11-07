@@ -1,19 +1,16 @@
 name: Build Zalith Launcher 2 APK
 
-# Zalith Launcher 2: verifica os 22 ZIPs, corrige e compila o APK (Artifact).
-# Os ZIPs são extraídos em /home/runner/zalith-src, fora do repositório.
-
 on:
   workflow_dispatch:
     inputs:
       arch:
-        description: "Arquitetura do APK (all = universal, maior)"
+        description: "Arquitetura do APK"
         required: true
         default: "all"
         type: choice
         options: ["all", "arm64", "arm", "x86", "x86_64"]
       build_type:
-        description: "auto = Debug sempre + Release se houver secrets de assinatura"
+        description: "Tipo de build"
         required: true
         default: "auto"
         type: choice
@@ -60,7 +57,6 @@ jobs:
           mkdir -p "$REPORT_DIR" "$SRC_ROOT"
           : > "$REPORT_DIR/problems.txt"
           : > "$REPORT_DIR/fixed.txt"
-          df -h / | tail -1
 
       - name: "Verificação 1/4 - localizar e testar os arquivos ZIP"
         run: |
@@ -75,7 +71,7 @@ jobs:
           expected=${#ZIPS[@]}; found=0; ok=0
           : > "$REPORT_DIR/zips.txt"
 
-          find_one() { # procura na raiz e em subpastas; prefere o caminho mais curto
+          find_one() {
             find "$GITHUB_WORKSPACE" -type f -name "$1" -not -path '*/.git/*' 2>/dev/null \
               | awk '{ print length($0) "\t" $0 }' | sort -n | cut -f2-
           }
@@ -88,11 +84,10 @@ jobs:
             fi
             found=$((found+1))
             f="${hits[0]}"
-            [ "${#hits[@]}" -gt 1 ] && echo "::warning::$n aparece ${#hits[@]}x; usando $f"
             size=$(stat -c %s "$f")
             magic=$(head -c2 "$f" 2>/dev/null)
             if [ "$size" -lt 1024 ] || [ "$magic" != "PK" ]; then
-              echo "::error::$n não é um ZIP válido (tamanho=$size). Se o repositório usa Git LFS, confirme que os arquivos foram baixados."
+              echo "::error::$n não é um ZIP válido (tamanho=$size)"
               echo "ZIP inválido/ponteiro LFS: $n ($size bytes)" >> "$REPORT_DIR/problems.txt"; continue
             fi
             if ! unzip -tqq "$f" >/dev/null 2>&1; then
@@ -105,25 +100,11 @@ jobs:
             ok=$((ok+1))
           done
 
-          readme=""
-          for cand in "LEIA-ME.72" "LEIA-ME.7z" "LEIA-ME*"; do
-            r=$(find_one "$cand" | head -1); [ -n "$r" ] && { readme="$r"; break; }
-          done
-          if [ -n "$readme" ]; then
-            echo "$readme" > "$REPORT_DIR/readme_path.txt"
-            [ "$(basename "$readme")" != "LEIA-ME.72" ] && \
-              echo "::notice::'LEIA-ME.72' não existe; usando '$(basename "$readme")' (provável erro de digitação no nome)."
-          else
-            echo "::warning::LEIA-ME não encontrado (não é necessário para compilar)."
-            echo "LEIA-ME não encontrado (opcional)" >> "$REPORT_DIR/problems.txt"
-          fi
-
           {
             echo "ZIPS_EXPECTED=$expected"
             echo "ZIPS_FOUND=$found"
             echo "ZIPS_OK=$ok"
           } >> "$GITHUB_ENV"
-          echo "ZIPs esperados=$expected encontrados=$found aprovados=$ok"
           [ "$ok" -eq "$expected" ] || { echo "::error::Nem todos os ZIPs passaram na verificação."; exit 1; }
 
       - name: "Verificação 2/4 - extrair para estrutura organizada e detectar conflitos"
@@ -216,7 +197,6 @@ jobs:
                 problem "$s usa foojay-resolver-convention $v, incompatível com Gradle $GRADLE_VERSION"
                 sed -i -E "s/(foojay-resolver-convention[\"')[:space:]]*version[[:space:]]*\(?[\"'])$v/\11.0.0/" "$s" \
                   && fixed "foojay-resolver-convention $v -> 1.0.0 em $s (funcionalidade preservada)"
-                grep -n foojay "$s"
               fi
             fi
           done
@@ -261,22 +241,20 @@ jobs:
       - name: Adicionar Java 21 e 25 ao projeto
         run: |
           set -eu
-          ASSETS=$(find "$SRC_ROOT" -type d -path "*/src/main/assets/runtimes" | sort | head -1)
-          [ -n "$ASSETS" ] || { echo "::error::pasta assets/runtimes não encontrada em $SRC_ROOT"; exit 1; }
-          mkdir -p "$ASSETS/jre-21" "$ASSETS/jre-25"
-          J21="$GITHUB_WORKSPACE/jre-21-universal.tar.xz"
-          J25="$GITHUB_WORKSPACE/jre-25-universal.tar.xz"
-          [ -f "$J21" ] || { echo "::error::jre-21-universal.tar.xz ausente na raiz do repositório"; exit 1; }
-          cp "$J21" "$ASSETS/jre-21/universal.tar.xz"
-          if [ -f "$J25" ]; then
-            cp "$J25" "$ASSETS/jre-25/universal.tar.xz"
+          A=$(find "$SRC_ROOT" -type d -path "*/src/main/assets/runtimes" | sort | head -1)
+          [ -n "$A" ] || { echo "::error::assets/runtimes nao encontrada"; exit 1; }
+          mkdir -p "$A/jre-21" "$A/jre-25"
+          W="$GITHUB_WORKSPACE"
+          [ -f "$W/jre-21-universal.tar.xz" ] || { echo "::error::jre-21-universal.tar.xz ausente na raiz"; exit 1; }
+          cp "$W/jre-21-universal.tar.xz" "$A/jre-21/universal.tar.xz"
+          if [ -f "$W/jre-25-universal.tar.xz" ]; then
+            cp "$W/jre-25-universal.tar.xz" "$A/jre-25/universal.tar.xz"
           else
-            ls "$J25".part* >/dev/null 2>&1 || { echo "::error::jre-25-universal.tar.xz (ou suas partes .part00/.part01) ausente na raiz do repositório"; exit 1; }
-            cat "$J25".part* > "$ASSETS/jre-25/universal.tar.xz"
+            ls "$W"/jre-25-universal.tar.xz.part* >/dev/null || { echo "::error::jre-25 (ou .part00/.part01) ausente na raiz"; exit 1; }
+            cat "$W"/jre-25-universal.tar.xz.part* > "$A/jre-25/universal.tar.xz"
           fi
-          xz -t "$ASSETS/jre-21/universal.tar.xz" "$ASSETS/jre-25/universal.tar.xz"
-          echo "Java 21 e 25 adicionados em $ASSETS"
-          ls -l "$ASSETS/jre-21" "$ASSETS/jre-25"
+          xz -t "$A/jre-21/universal.tar.xz" "$A/jre-25/universal.tar.xz"
+          ls -l "$A/jre-21" "$A/jre-25"
 
       - name: Conferir runtimes Java embutidos
         run: |
@@ -334,7 +312,6 @@ jobs:
             *) r=$s ;;
           esac
           if [ "$r" = true ] && [ "$s" != true ]; then
-            echo "::warning::Release ignorado: faltam STORE_PASSWORD/KEY_PASSWORD."
             echo "Release ignorado: secrets ausentes" >> "$REPORT_DIR/problems.txt"; r=false
           fi
           echo "BUILD_DEBUG=$d" >> "$GITHUB_ENV"; echo "BUILD_RELEASE=$r" >> "$GITHUB_ENV"
@@ -370,7 +347,7 @@ jobs:
           done < /tmp/apklist.txt
           ls -lh /tmp/apks
           if [ -z "$(ls -A /tmp/apks 2>/dev/null)" ]; then
-            echo "::warning::Nenhum APK gerado. Veja qual passo anterior (Compilar Debug/Release) falhou."
+            echo "::warning::Nenhum APK gerado."
           fi
           exit 0
 
@@ -396,4 +373,19 @@ jobs:
           set +e +o pipefail
           {
             echo "## Resumo da execução"
-            echo "- ZIPs esperados/encontrados/aprovados: ${ZIPS_EXPECTED:
+            echo "- ZIPs esperados/encontrados/aprovados: ${ZIPS_EXPECTED:-?}/${ZIPS_FOUND:-?}/${ZIPS_OK:-?}"
+            echo "- Gradle ${GRADLE_VERSION:-?} | AGP ${AGP_VERSION:-?} | JDK ${JDK_MAIN:-?}"
+            echo "### Problemas"
+            cat "$REPORT_DIR/problems.txt" 2>/dev/null || true
+            echo "### Correções automáticas"
+            cat "$REPORT_DIR/fixed.txt" 2>/dev/null || true
+            for l in "$REPORT_DIR"/*.log; do
+              [ -f "$l" ] || continue
+              echo "### Log: $(basename "$l")"; echo '```'
+              if grep -q 'What went wrong' "$l"; then grep -A25 -m1 'What went wrong' "$l"
+              else grep -iE 'error|fail|exception|denied' "$l" | tail -n 15; fi
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+          
