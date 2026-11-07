@@ -398,4 +398,4 @@ jobs:
               # Percorre todas as referências aos aliases de plugins do catálogo Gradle.
               for m in re.finditer(r"libs\.plugins\.([A-Za-z0-9_.]+)", s):
                   alias = m.group(1)
-                  exists =
+                  if not a
