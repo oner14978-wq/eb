@@ -391,5 +391,6 @@ jobs:
         run: |
           cd "$PROJECT_DIR"
           fail=0
-          [ -x gradlew ] || { echo "::error::gradlew continua sem permissão"; fail=1; }
-          [ -f gradle
+          if ! test -x gradlew; then
+            echo "::error::gradlew continua sem permissão"
+            f
