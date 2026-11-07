@@ -392,10 +392,13 @@ jobs:
           plugs = {norm(k) for k in t.get("plugins", {})}
           bundles = {norm(k) for k in t.get("bundles", {})}
           bad = []
-          for f in glob.glob("**/build.gradle*", recursive=True) + ["build.gradle.kts"]:
-              if not os.path.isfile(f): continue
-              s = open(f, encoding="utf-8", errors="ignore").read()
-              # Percorre todas as referências aos aliases de plugins do catálogo Gradle.
-              for m in re.finditer(r"libs\.plugins\.([A-Za-z0-9_.]+)", s):
-                  alias = m.group(1)
-                  if not a
+          gradle_files = glob.glob("**/build.gradle*", recursive=True)
+          if "build.gradle.kts" not in gradle_files:
+              gradle_files.append("build.gradle.kts")
+          for f in gradle_files:
+              if not os.path.isfile(f):
+                  continue
+              with open(f, encoding="utf-8", errors="ignore") as source_file:
+                  source_text = source_file.read()
+
+              # Verifica 
