@@ -729,6 +729,39 @@ jobs:
           print("Raiz Gradle:", proj)
           print("Módulo Android:", app_path)
           print("JDK:", main_jdk)
-          PY
+          PY 
+      - name: Localizar APKs gerados
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/apks
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -path '*/build/outputs/apk/*/*.apk' \
+            -not -path '*/build/intermediates/*' \
+            -exec cp -f {} /tmp/apks/ \;
+
+          echo "APKs encontrados:"
+          find /tmp/apks -maxdepth 1 -type f -name '*.apk' -print
+
+          COUNT=$(find /tmp/apks -maxdepth 1 -type f -name '*.apk' | wc -l)
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::Nenhum APK foi gerado."
+            exit 1
+          fi
+          
+      - name: Publicar APK para instalar
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zalith-Launcher-2-APK
+          path: /tmp/apks/*.apk
+          if-no-files-found: error
+          retention-days: 30
+          
           
               
