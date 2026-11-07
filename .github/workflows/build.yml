@@ -1,32 +1,42 @@
+
 name: Build Zalith Launcher 2 APK
 
 # ---------------------------------------------------------------------------
-# Compila o Zalith Launcher 2 a partir dos 22 pacotes ZIP guardados no
-# repositório (Zali-03.zip ... ZalithLa-19.zip), verifica tudo antes e depois
-# de corrigir, e publica o APK como Artifact da execução.
-#
-# Os pacotes NÃO são extraídos dentro do repositório: vão para
-# /home/runner/zalith-src, então os workflows internos dos ZIPs
-# (.github/workflows/*) nunca ficam ativos nem conflitam com este arquivo.
+# COMPILAÇÃO COMPLETA DO ZALITH LAUNCHER 2
+# 22 pacotes ZIP
+# Verificação, extração, análise, correção e compilação Android
+# Publicação dos APKs e relatório como Artifacts
 # ---------------------------------------------------------------------------
 
 on:
   workflow_dispatch:
     inputs:
       arch:
-        description: "Arquitetura do APK (all = universal, maior)"
+        description: "Arquitetura do APK"
         required: true
         default: "all"
         type: choice
-        options: ["all", "arm64", "arm", "x86", "x86_64"]
+        options:
+          - all
+          - arm64
+          - arm
+          - x86
+          - x86_64
+
       build_type:
-        description: "auto = Debug sempre + Release se houver secrets de assinatura"
+        description: "Tipo de compilação"
         required: true
         default: "auto"
         type: choice
-        options: ["auto", "debug", "release", "both"]
+        options:
+          - auto
+          - debug
+          - release
+          - both
+
   push:
-    branches: ["**"]
+    branches:
+      - "**"
 
 concurrency:
   group: zalith-apk-${{ github.ref }}
@@ -43,12 +53,14 @@ env:
 
 jobs:
   build:
-    name: Verificar, corrigir e compilar
+    name: Verificar, corrigir e compilar Zalith Launcher 2
     runs-on: ubuntu-24.04
     timeout-minutes: 150
+
     defaults:
       run:
         shell: bash
+
     env:
       STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
       KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -56,76 +68,149 @@ jobs:
       CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
 
     steps:
-      # ---------------------------------------------------------------- 0
+
+      # ---------------------------------------------------------------------
+      # 0. PREPARAÇÃO
+      # ---------------------------------------------------------------------
+
       - name: Checkout do repositório
         uses: actions/checkout@v6
         with:
           lfs: true
 
-      - name: Liberar espaço em disco e preparar relatório
+      - name: Preparar ambiente e liberar espaço
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
-          mkdir -p "$REPORT_DIR" "$SRC_ROOT"
+          set -euo pipefail
+
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/boost || true
+
+          mkdir -p "$REPORT_DIR"
+          mkdir -p "$SRC_ROOT"
+          mkdir -p /tmp/apks
+
           : > "$REPORT_DIR/problems.txt"
           : > "$REPORT_DIR/fixed.txt"
-          df -h / | tail -1
-
-      # ---------------------------------------------------------------- 1
-      - name: "Verificação 1/4 - localizar e testar os arquivos ZIP"
-        run: |
-          set -uo pipefail
-          ZIPS=(
-            Zali-03.zip Zalit-04.zip Zalit-05.zip Zalit-06.zip Zalit-08.zip
-            Zalit-10.zip Zalit-18.zip Zalith-01.zip Zalith-02.zip Zalith-09.zip
-            Zalith-12.zip Zalith-13.zip Zalith-20.zip ZalithL-14.zip ZalithL-15.zip
-            ZalithL-16.zip ZalithL-21.zip ZalithL-22.zip ZalithLa-07.zip
-            ZalithLa-11.zip ZalithLa-17.zip ZalithLa-19.zip
-          )
-          expected=${#ZIPS[@]}; found=0; ok=0
           : > "$REPORT_DIR/zips.txt"
 
-          find_one() { # procura na raiz e em subpastas; prefere o caminho mais curto
-            find "$GITHUB_WORKSPACE" -type f -name "$1" -not -path '*/.git/*' 2>/dev/null \
-              | awk '{ print length($0) "\t" $0 }' | sort -n | cut -f2-
+          echo "Ambiente preparado."
+          df -h /
+
+      # ---------------------------------------------------------------------
+      # 1. VERIFICAÇÃO DOS 22 ZIPs
+      # ---------------------------------------------------------------------
+
+      - name: "Verificação 1/4 - localizar e testar os 22 ZIPs"
+        run: |
+          set -uo pipefail
+
+          ZIPS=(
+            Zali-03.zip
+            Zalit-04.zip
+            Zalit-05.zip
+            Zalit-06.zip
+            Zalit-08.zip
+            Zalit-10.zip
+            Zalit-18.zip
+            Zalith-01.zip
+            Zalith-02.zip
+            Zalith-09.zip
+            Zalith-12.zip
+            Zalith-13.zip
+            Zalith-20.zip
+            ZalithL-14.zip
+            ZalithL-15.zip
+            ZalithL-16.zip
+            ZalithL-21.zip
+            ZalithL-22.zip
+            ZalithLa-07.zip
+            ZalithLa-11.zip
+            ZalithLa-17.zip
+            ZalithLa-19.zip
+          )
+
+          expected=${#ZIPS[@]}
+          found=0
+          ok=0
+
+          find_one() {
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name "$1" \
+              -not -path '*/.git/*' \
+              2>/dev/null |
+              awk '{ print length($0) "\t" $0 }' |
+              sort -n |
+              cut -f2-
           }
 
           for n in "${ZIPS[@]}"; do
+
             mapfile -t hits < <(find_one "$n")
+
             if [ "${#hits[@]}" -eq 0 ]; then
-              echo "::error::ZIP ausente no repositório: $n"
-              echo "ZIP ausente: $n" >> "$REPORT_DIR/problems.txt"; continue
+              echo "::error::ZIP ausente: $n"
+              echo "ZIP ausente: $n" >> "$REPORT_DIR/problems.txt"
+              continue
             fi
+
             found=$((found+1))
             f="${hits[0]}"
-            [ "${#hits[@]}" -gt 1 ] && echo "::warning::$n aparece ${#hits[@]}x; usando $f"
+
+            if [ "${#hits[@]}" -gt 1 ]; then
+              echo "::warning::$n aparece em vários locais."
+            fi
+
             size=$(stat -c %s "$f")
-            magic=$(head -c2 "$f" 2>/dev/null)
+            magic=$(head -c 2 "$f" 2>/dev/null || true)
+
             if [ "$size" -lt 1024 ] || [ "$magic" != "PK" ]; then
-              echo "::error::$n não é um ZIP válido (tamanho=$size). Se o repositório usa Git LFS, confirme que os arquivos foram baixados."
-              echo "ZIP inválido/ponteiro LFS: $n ($size bytes)" >> "$REPORT_DIR/problems.txt"; continue
+              echo "::error::ZIP inválido ou ponteiro Git LFS: $n"
+              echo "ZIP inválido: $n ($size bytes)" >> "$REPORT_DIR/problems.txt"
+              continue
             fi
+
             if ! unzip -tqq "$f" >/dev/null 2>&1; then
-              echo "::error::Falha no teste de integridade: $n"
-              echo "ZIP corrompido: $n" >> "$REPORT_DIR/problems.txt"; continue
+              echo "::error::ZIP corrompido: $n"
+              echo "ZIP corrompido: $n" >> "$REPORT_DIR/problems.txt"
+              continue
             fi
+
             entries=$(unzip -Z1 "$f" | grep -vc '/$' || true)
-            printf 'OK  %-18s %10s bytes  %5s arquivos  (%s)\n' "$n" "$size" "$entries" "${f#$GITHUB_WORKSPACE/}"
+
+            printf 'OK %-20s %12s bytes %6s arquivos\n' \
+              "$n" "$size" "$entries"
+
             echo "$f" >> "$REPORT_DIR/zips.txt"
+
             ok=$((ok+1))
           done
 
-          # LEIA-ME: o nome pedido é LEIA-ME.72; o arquivo real do pacote chama-se LEIA-ME.7z
           readme=""
-          for cand in "LEIA-ME.72" "LEIA-ME.7z" "LEIA-ME*"; do
-            r=$(find_one "$cand" | head -1); [ -n "$r" ] && { readme="$r"; break; }
+
+          for cand in "LEIA-ME.72" "LEIA-ME.7z"; do
+            r=$(find_one "$cand" | head -1 || true)
+
+            if [ -n "$r" ]; then
+              readme="$r"
+              break
+            fi
           done
+
+          if [ -z "$readme" ]; then
+            readme=$(find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name 'LEIA-ME*' \
+              -not -path '*/.git/*' \
+              2>/dev/null | head -1 || true)
+          fi
+
           if [ -n "$readme" ]; then
             echo "$readme" > "$REPORT_DIR/readme_path.txt"
-            [ "$(basename "$readme")" != "LEIA-ME.72" ] && \
-              echo "::notice::'LEIA-ME.72' não existe; usando '$(basename "$readme")' (provável erro de digitação no nome)."
+            echo "LEIA-ME encontrado: $readme"
           else
-            echo "::warning::LEIA-ME não encontrado (não é necessário para compilar)."
-            echo "LEIA-ME não encontrado (opcional)" >> "$REPORT_DIR/problems.txt"
+            echo "::warning::LEIA-ME não encontrado."
           fi
 
           {
@@ -133,382 +218,489 @@ jobs:
             echo "ZIPS_FOUND=$found"
             echo "ZIPS_OK=$ok"
           } >> "$GITHUB_ENV"
-          echo "ZIPs esperados=$expected encontrados=$found aprovados=$ok"
-          [ "$ok" -eq "$expected" ] || { echo "::error::Nem todos os ZIPs passaram na verificação."; exit 1; }
 
-      - name: Ler o LEIA-ME (informativo)
+          echo "ZIPs esperados: $expected"
+          echo "ZIPs encontrados: $found"
+          echo "ZIPs aprovados: $ok"
+
+          if [ "$ok" -ne "$expected" ]; then
+            echo "::error::Nem todos os 22 ZIPs passaram na verificação."
+            exit 1
+          fi
+
+      - name: Ler LEIA-ME
         continue-on-error: true
         run: |
-          [ -f "$REPORT_DIR/readme_path.txt" ] || exit 0
-          f=$(cat "$REPORT_DIR/readme_path.txt")
-          command -v 7z >/dev/null 2>&1 || sudo apt-get install -y -qq p7zip-full >/dev/null
-          mkdir -p /tmp/leiame && 7z x -y -p"" -o/tmp/leiame "$f" >/dev/null 2>&1 \
-            || 7z x -y -o/tmp/leiame "$f" >/dev/null 2>&1 \
-            || { echo "::warning::Não foi possível abrir $f"; exit 0; }
-          echo "----- conteúdo de $(basename "$f") -----"
-          find /tmp/leiame -type f -exec sh -c 'echo "## $1"; head -c 4000 "$1"; echo' _ {} \;
+          set -u
 
-      # ---------------------------------------------------------------- 2
-      - name: "Verificação 2/4 - extrair para estrutura organizada e detectar conflitos"
+          [ -f "$REPORT_DIR/readme_path.txt" ] || exit 0
+
+          f=$(cat "$REPORT_DIR/readme_path.txt")
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full
+
+          mkdir -p /tmp/leiame
+
+          7z x -y -o/tmp/leiame "$f" >/dev/null 2>&1 || {
+            echo "::warning::Não foi possível extrair o LEIA-ME."
+            exit 0
+          }
+
+          echo "Conteúdo do LEIA-ME:"
+
+          find /tmp/leiame -type f -print
+
+          find /tmp/leiame -type f -exec sh -c '
+            echo "----- $1 -----"
+            head -c 5000 "$1"
+            echo
+          ' _ {} \;
+
+      # ---------------------------------------------------------------------
+      # 2. EXTRAÇÃO DOS PACOTES
+      # ---------------------------------------------------------------------
+
+      - name: "Verificação 2/4 - extrair e detectar conflitos"
         run: |
           python3 - <<'PY'
-          import os, sys, zipfile, collections
-          src = os.environ["SRC_ROOT"]; rep = os.environ["REPORT_DIR"]
-          zips = [l.strip() for l in open(f"{rep}/zips.txt") if l.strip()]
+          import os
+          import sys
+          import zipfile
+          import collections
+          import stat
+
+          src = os.environ["SRC_ROOT"]
+          rep = os.environ["REPORT_DIR"]
+
+          os.makedirs(src, exist_ok=True)
+
+          zips = [
+              x.strip()
+              for x in open(f"{rep}/zips.txt")
+              if x.strip()
+          ]
+
           zips.sort(key=lambda p: os.path.basename(p))
+
           owners = collections.defaultdict(list)
+
           for z in zips:
               with zipfile.ZipFile(z) as zf:
                   for i in zf.infolist():
-                      if i.is_dir() or i.filename.startswith("__MACOSX/"):
+
+                      if i.is_dir():
                           continue
-                      owners[i.filename].append((z, i.CRC, i.file_size))
-          unsafe = [n for n in owners if n.startswith("/") or ".." in n.split("/")]
-          if unsafe:
-              print("::error::Caminhos inseguros nos ZIPs:", unsafe[:5]); sys.exit(1)
-          same = {n: v for n, v in owners.items() if len(v) > 1 and len({c for _, c, _ in v}) == 1}
-          diff = {n: v for n, v in owners.items() if len({c for _, c, _ in v}) > 1}
-          lower = collections.defaultdict(set)
-          for n in owners: lower[n.lower()].add(n)
-          case = {k: v for k, v in lower.items() if len(v) > 1}
-          print(f"arquivos únicos: {len(owners)} | duplicados idênticos: {len(same)} | "
-                f"conflitos de conteúdo: {len(diff)} | colisões de maiúsculas: {len(case)}")
-          with open(f"{rep}/problems.txt", "a") as pf, open(f"{rep}/fixed.txt", "a") as ff:
-              for n, v in list(diff.items())[:50]:
-                  msg = f"Conflito de conteúdo em {n}: " + ", ".join(os.path.basename(z) for z, _, _ in v)
-                  print("::warning::" + msg + " -> prevalece o último pacote (ordem alfabética)")
-                  pf.write(msg + "\n"); ff.write(f"Conflito {n}: mantido o do último pacote\n")
-              for k, v in case.items():
-                  pf.write(f"Colisão de maiúsculas/minúsculas: {sorted(v)}\n")
-          total = 0
-          for z in zips:
-              with zipfile.ZipFile(z) as zf:
-                  for i in zf.infolist():
+
                       if i.filename.startswith("__MACOSX/"):
                           continue
-                      dest = os.path.join(src, i.filename)
+
+                      name = i.filename.replace("\\", "/")
+                      parts = name.split("/")
+
+                      if name.startswith("/") or ".." in parts:
+                          print("::error::Caminho inseguro:", name)
+                          sys.exit(1)
+
+                      if "\x00" in name:
+                          print("::error::Nome de arquivo inválido.")
+                          sys.exit(1)
+
+                      mode = (i.external_attr >> 16) & 0o170000
+
+                      if mode == stat.S_IFLNK:
+                          print("::error::Link simbólico não permitido:", name)
+                          sys.exit(1)
+
+                      owners[name].append(
+                          (z, i.CRC, i.file_size)
+                      )
+
+          same = {
+              n: v for n, v in owners.items()
+              if len(v) > 1 and len({c for _, c, _ in v}) == 1
+          }
+
+          diff = {
+              n: v for n, v in owners.items()
+              if len({c for _, c, _ in v}) > 1
+          }
+
+          lower = collections.defaultdict(set)
+
+          for n in owners:
+              lower[n.lower()].add(n)
+
+          case = {
+              k: v for k, v in lower.items()
+              if len(v) > 1
+          }
+
+          print("Arquivos únicos:", len(owners))
+          print("Duplicados idênticos:", len(same))
+          print("Conflitos de conteúdo:", len(diff))
+          print("Colisões de nomes:", len(case))
+
+          with open(f"{rep}/problems.txt", "a") as pf:
+              with open(f"{rep}/fixed.txt", "a") as ff:
+
+                  for n, v in diff.items():
+                      names = ", ".join(
+                          os.path.basename(z)
+                          for z, _, _ in v
+                      )
+
+                      msg = f"Conflito em {n}: {names}"
+
+                      print("::warning::" + msg)
+                      pf.write(msg + "\n")
+
+                      ff.write(
+                          f"Conflito {n}: prevalece o último ZIP alfabético.\n"
+                      )
+
+                  for k, v in case.items():
+                      msg = f"Colisão de maiúsculas/minúsculas: {sorted(v)}"
+                      pf.write(msg + "\n")
+                      print("::warning::" + msg)
+
+          total = 0
+
+          for z in zips:
+              with zipfile.ZipFile(z) as zf:
+
+                  for i in zf.infolist():
+
                       if i.is_dir():
-                          os.makedirs(dest, exist_ok=True); continue
+                          continue
+
+                      if i.filename.startswith("__MACOSX/"):
+                          continue
+
+                      name = i.filename.replace("\\", "/")
+                      dest = os.path.abspath(
+                          os.path.join(src, name)
+                      )
+
+                      if os.path.commonpath([src, dest]) != os.path.abspath(src):
+                          print("::error::Caminho fora da pasta de extração.")
+                          sys.exit(1)
+
                       os.makedirs(os.path.dirname(dest), exist_ok=True)
-                      with zf.open(i) as r, open(dest, "wb") as w:
-                          while True:
-                              b = r.read(1 << 20)
-                              if not b: break
-                              w.write(b)
+
+                      with zf.open(i) as r:
+                          with open(dest, "wb") as w:
+                              while True:
+                                  b = r.read(1024 * 1024)
+                                  if not b:
+                                      break
+                                  w.write(b)
+
                       mode = (i.external_attr >> 16) & 0o777
-                      if mode: os.chmod(dest, mode)
+
+                      if mode:
+                          os.chmod(dest, mode & 0o755)
+
                       total += 1
-          print(f"extraídos {total} arquivos para {src}")
-          open(os.environ["GITHUB_ENV"], "a").write(f"FILES_EXTRACTED={total}\n")
+
+          print(f"Extraídos {total} arquivos para {src}")
+
+          with open(os.environ["GITHUB_ENV"], "a") as g:
+              g.write(f"FILES_EXTRACTED={total}\n")
           PY
 
-      # ---------------------------------------------------------------- 3
-      - name: "Verificação 3/4 - identificar a estrutura real do projeto Android"
+      # ---------------------------------------------------------------------
+      # 3. IDENTIFICAÇÃO DO PROJETO GRADLE
+      # ---------------------------------------------------------------------
+
+      - name: "Verificação 3/4 - identificar projeto Android"
         run: |
           python3 - <<'PY'
-          import os, re, sys, glob
-          src = os.environ["SRC_ROOT"]; rep = os.environ["REPORT_DIR"]
-          SKIP = {"build", ".gradle", ".git", "node_modules", ".cxx", "target"}
+          import os
+          import re
+          import sys
+          import glob
+
+          src = os.environ["SRC_ROOT"]
+          rep = os.environ["REPORT_DIR"]
+
+          SKIP = {
+              "build", ".gradle", ".git",
+              "node_modules", ".cxx", "target"
+          }
+
           def walk(base):
               for d, ds, fs in os.walk(base):
                   ds[:] = [x for x in ds if x not in SKIP]
                   yield d, fs
-          # settings.gradle(.kts) mais raso
-          cands = []
+
+          def read(p):
+              with open(p, encoding="utf-8", errors="ignore") as f:
+                  return f.read()
+
+          candidates = []
+
           for d, fs in walk(src):
               for n in ("settings.gradle.kts", "settings.gradle"):
-                  if n in fs: cands.append((d.count(os.sep), os.path.join(d, n)))
-          if not cands:
-              print("::error::Nenhum settings.gradle(.kts) encontrado após a extração."); sys.exit(1)
-          cands.sort(); settings = cands[0][1]; proj = os.path.dirname(settings)
-          if len(cands) > 1:
-              print("::notice::Vários settings.gradle encontrados; usando o mais raso:", settings)
+                  if n in fs:
+                      candidates.append(
+                          (d.count(os.sep), os.path.join(d, n))
+                      )
+
+          if not candidates:
+              print("::error::Nenhum settings.gradle encontrado.")
+              sys.exit(1)
+
+          candidates.sort()
+
+          settings = candidates[0][1]
+          proj = os.path.dirname(settings)
+
           print("PROJECT_DIR =", proj)
-          def read(p):
-              return open(p, encoding="utf-8", errors="ignore").read()
-          stext = read(settings)
-          # módulos
-          paths = []
-          for line in stext.splitlines():
-              s = line.strip()
-              if re.match(r"include\b", s):
-                  paths += re.findall(r"""["'](:?[^"']+)["']""", s)
-          paths = [p if p.startswith(":") else ":" + p for p in paths]
+
+          settings_text = read(settings)
+
+          paths = re.findall(
+              r"""include\s*\(?\s*["'](:[^"']+)["']\s*\)?""",
+              settings_text
+          )
+
+          paths += re.findall(
+              r"""include\s*\(\s*["'](:[^"']+)["']\s*\)""",
+              settings_text
+          )
+
+          paths = list(dict.fromkeys(paths))
+
           overrides = {}
-          for line in stext.splitlines():
-              m = re.search(r"""project\(\s*["'](:[^"']+)["']\s*\)\.projectDir\s*=.*?["']([^"']+)["']\s*\)?\s*$""", line.strip())
-              if m: overrides[m.group(1)] = m.group(2)
+
+          for m in re.finditer(
+              r"""project\s*\(\s*["'](:[^"']+)["']\s*\)\s*\.projectDir\s*=\s*file\s*\(\s*["']([^"']+)["']\s*\)""",
+              settings_text
+          ):
+              overrides[m.group(1)] = m.group(2)
+
           modules = {}
-          for p in dict.fromkeys(paths):
-              modules[p] = overrides.get(p, p.strip(":").replace(":", "/"))
-          print(f"módulos declarados: {len(modules)}")
-          app = []; missing = []
+
+          for p in paths:
+              modules[p] = overrides.get(
+                  p,
+                  p.strip(":").replace(":", "/")
+              )
+
+          app = []
+          missing = []
+
           for p, rel in modules.items():
-              d = os.path.join(proj, rel)
-              bf = [f for f in ("build.gradle.kts", "build.gradle") if os.path.isfile(os.path.join(d, f))]
-              if not os.path.isdir(d) or not bf:
-                  missing.append(f"{p} -> {rel}"); print("  FALTA", p, rel); continue
+
+              d = os.path.normpath(os.path.join(proj, rel))
+
+              bf = [
+                  f for f in ("build.gradle.kts", "build.gradle")
+                  if os.path.isfile(os.path.join(d, f))
+              ]
+
+              if not bf:
+                  missing.append(f"{p} -> {rel}")
+                  continue
+
               t = read(os.path.join(d, bf[0]))
-              kind = "app" if re.search(r"com\.android\.application|android\.application", t) else \
-                     "lib" if re.search(r"com\.android\.library|android\.library", t) else "jvm/outro"
-              if kind == "app": app.append((p, rel, os.path.join(d, bf[0])))
-              print(f"  {p:28s} {rel:20s} {kind}")
-          if missing:
-              open(f"{rep}/problems.txt", "a").write("Módulos sem diretório/build file: " + "; ".join(missing) + "\n")
-              print("::error::Módulos declarados mas ausentes:", missing); sys.exit(1)
+
+              if (
+                  re.search(r"com\.android\.application", t)
+                  or re.search(r"android\.application", t)
+                  or re.search(r"libs\.plugins\.android\.application", t)
+              ):
+                  app.append((p, rel, os.path.join(d, bf[0])))
+
+          # Fallback: localizar o módulo Android mesmo quando o include
+          # utiliza sintaxe Gradle diferente.
           if not app:
-              print("::error::Nenhum módulo com plugin com.android.application."); sys.exit(1)
-          if len(app) > 1: print("::warning::Mais de um módulo application; usando", app[0][0])
+
+              for d, fs in walk(proj):
+
+                  for bf in ("build.gradle.kts", "build.gradle"):
+
+                      if bf not in fs:
+                          continue
+
+                      path = os.path.join(d, bf)
+                      t = read(path)
+
+                      if (
+                          re.search(r"com\.android\.application", t)
+                          or re.search(r"android\.application", t)
+                          or re.search(r"libs\.plugins\.android\.application", t)
+                      ):
+                          rel = os.path.relpath(d, proj)
+                          app.append((
+                              ":" + rel.replace(os.sep, ":").lstrip(":"),
+                              rel,
+                              path
+                          ))
+
+          if not app:
+              print("::error::Nenhum módulo Android application encontrado.")
+              sys.exit(1)
+
+          if len(app) > 1:
+              print("::warning::Vários módulos application encontrados.")
+              print("Será utilizado:", app[0][0])
+
           app_path, app_dir, app_build = app[0]
-          # wrapper
+
+          print("Módulo principal:", app_path)
+          print("Pasta principal:", app_dir)
+
+          # Gradle Wrapper
           gradlew = os.path.join(proj, "gradlew")
-          wp = os.path.join(proj, "gradle/wrapper/gradle-wrapper.properties")
-          wj = os.path.join(proj, "gradle/wrapper/gradle-wrapper.jar")
-          for label, f in (("gradlew", gradlew), ("gradle-wrapper.properties", wp), ("gradle-wrapper.jar", wj)):
+
+          wp = os.path.join(
+              proj, "gradle/wrapper/gradle-wrapper.properties"
+          )
+
+          wj = os.path.join(
+              proj, "gradle/wrapper/gradle-wrapper.jar"
+          )
+
+          for label, f in (
+              ("gradlew", gradlew),
+              ("gradle-wrapper.properties", wp),
+              ("gradle-wrapper.jar", wj)
+          ):
               if not os.path.isfile(f):
-                  print(f"::error::{label} ausente em {proj}"); sys.exit(1)
-          gv = re.search(r"gradle-([0-9][0-9.]*)-", read(wp)); gv = gv.group(1) if gv else "?"
-          # AGP
+                  print(f"::error::{label} ausente: {f}")
+                  sys.exit(1)
+
+          gv_match = re.search(
+              r"gradle-([0-9][0-9.]*)-",
+              read(wp)
+          )
+
+          gv = gv_match.group(1) if gv_match else "?"
+
+          # Android Gradle Plugin
           agp = None
-          toml = os.path.join(proj, "gradle/libs.versions.toml")
+
+          toml = os.path.join(
+              proj, "gradle/libs.versions.toml"
+          )
+
           if os.path.isfile(toml):
-              m = re.search(r'^agp\s*=\s*"([^"]+)"', read(toml), re.M); agp = m and m.group(1)
+              m = re.search(
+                  r'^agp\s*=\s*"([^"]+)"',
+                  read(toml),
+                  re.M
+              )
+              if m:
+                  agp = m.group(1)
+
           if not agp:
+
               for d, fs in walk(proj):
                   for f in fs:
-                      if f.startswith("build.gradle"):
-                          m = re.search(r"com\.android\.tools\.build:gradle:([0-9.]+)", read(os.path.join(d, f)))
-                          if m: agp = m.group(1)
-          maj = lambda v: int(re.match(r"\d+", v or "0").group(0))
-          main_jdk = 21 if (maj(gv) >= 9 or maj(agp) >= 9) else 17
-          # toolchains exigidos pelos módulos
+                      if not f.startswith("build.gradle"):
+                          continue
+
+                      t = read(os.path.join(d, f))
+
+                      m = re.search(
+                          r"com\.android\.tools\.build:gradle:([0-9.]+)",
+                          t
+                      )
+
+                      if m:
+                          agp = m.group(1)
+                          break
+
+          # JDK principal
+          def major(v):
+              m = re.match(r"\d+", v or "0")
+              return int(m.group()) if m else 0
+
+          main_jdk = 17
+
+          if major(gv) >= 9 or major(agp) >= 9:
+              main_jdk = 21
+
+          # Toolchains
           tool = set()
+
           for d, fs in walk(proj):
               for f in fs:
                   if f.startswith("build.gradle"):
-                      tool |= {int(x) for x in re.findall(r"JavaLanguageVersion\.of\((\d+)\)", read(os.path.join(d, f)))}
-          jdks = sorted(tool - {main_jdk}) + [main_jdk]
+                      t = read(os.path.join(d, f))
+
+                      tool |= {
+                          int(x)
+                          for x in re.findall(
+                              r"JavaLanguageVersion\.of\((\d+)\)",
+                              t
+                          )
+                      }
+
+          # Native
           app_text = read(app_build)
-          ndk = re.search(r'ndkVersion\s*=\s*"([^"]+)"', app_text)
-          mk = re.search(r'ndkBuild\s*\{\s*path\s*=\s*file\("([^"]+)"\)', app_text, re.S)
-          has_rust = bool(glob.glob(os.path.join(proj, "**/Cargo.toml"), recursive=True))
-          # contagem de fontes/recursos
-          cnt = {"kt": 0, "java": 0, "xml": 0, "res_dirs": 0}
+
+          ndk = re.search(
+              r'ndkVersion\s*=\s*"([^"]+)"',
+              app_text
+          )
+
+          mk = re.search(
+              r'ndkBuild\s*\{\s*path\s*=\s*file\("([^"]+)"\)',
+              app_text,
+              re.S
+          )
+
+          has_rust = bool(
+              glob.glob(
+                  os.path.join(proj, "**/Cargo.toml"),
+                  recursive=True
+              )
+          )
+
+          # Contagem
+          cnt = {
+              "kt": 0,
+              "java": 0,
+              "xml": 0,
+              "res_dirs": 0
+          }
+
           for d, fs in walk(proj):
-              if os.path.basename(d) == "res" and "src" in d: cnt["res_dirs"] += 1
+
+              if os.path.basename(d) == "res" and "src" in d:
+                  cnt["res_dirs"] += 1
+
               for f in fs:
                   e = f.rsplit(".", 1)[-1]
-                  if e in cnt: cnt[e] += 1
-          print(f"Kotlin={cnt['kt']} Java={cnt['java']} XML={cnt['xml']} pastas res={cnt['res_dirs']}")
-          if cnt["kt"] == 0 or cnt["xml"] == 0:
-              print("::error::Projeto sem Kotlin/XML - estrutura inesperada."); sys.exit(1)
-          man = os.path.join(proj, app_dir, "src/main/AndroidManifest.xml")
-          if not os.path.isfile(man):
-              print("::error::AndroidManifest.xml do app ausente:", man); sys.exit(1)
-          print(f"Gradle={gv} AGP={agp} JDK principal={main_jdk} toolchains={sorted(tool)}")
-          print(f"Módulo app: {app_path} ({app_dir}) | NDK={ndk and ndk.group(1)} | ndk-build={mk and mk.group(1)} | Rust={has_rust}")
+                  if e in cnt:
+                      cnt[e] += 1
+
+          print("Kotlin:", cnt["kt"])
+          print("Java:", cnt["java"])
+          print("XML:", cnt["xml"])
+          print("Recursos:", cnt["res_dirs"])
+
+          manifest = os.path.join(
+              proj, app_dir, "src/main/AndroidManifest.xml"
+          )
+
+          if not os.path.isfile(manifest):
+              print("::error::AndroidManifest.xml ausente:", manifest)
+              sys.exit(1)
+
+          if cnt["kt"] == 0 and cnt["java"] == 0:
+              print("::error::Nenhum arquivo Kotlin ou Java encontrado.")
+              sys.exit(1)
+
+          print("Gradle:", gv)
+          print("AGP:", agp or "não identificado")
+          print("JDK:", main_jdk)
+          print("Toolchains:", sorted(tool))
+          print("NDK:", ndk.group(1) if ndk else "não declarado")
+          print("Rust:", has_rust)
+
           env = {
-              "PROJECT_DIR": proj, "APP_PATH": app_path, "APP_DIR": app_dir,
-              "GRADLE_VERSION": gv, "AGP_VERSION": agp or "?", "JDK_MAIN": str(main_jdk),
-              "NDK_VERSION": ndk.group(1) if ndk else "", "HAS_RUST": str(has_rust).lower(),
-              "NDK_MK_PATH": mk.group(1) if mk else "",
-              "MODULE_COUNT": str(len(modules)),
-          }
-          with open(os.environ["GITHUB_ENV"], "a") as g:
-              for k, v in env.items(): g.write(f"{k}={v}\n")
-              g.write("JDK_LIST<<__EOF__\n" + "\n".join(str(j) for j in jdks) + "\n__EOF__\n")
-          PY
-
-      # ---------------------------------------------------------------- 4
-      - name: "Verificação 4/4 - correção automática"
-        run: |
-          set -uo pipefail
-          cd "$PROJECT_DIR"
-          fixed()   { echo "$1" >> "$REPORT_DIR/fixed.txt"; echo "CORRIGIDO: $1"; }
-          problem() { echo "$1" >> "$REPORT_DIR/problems.txt"; echo "::warning::PROBLEMA: $1"; }
-
-          # (a) permissão de execução do wrapper (ZIP/Git podem perder o bit)
-          if [ ! -x gradlew ]; then
-            problem "gradlew sem permissão de execução"; chmod +x gradlew && fixed "chmod +x gradlew"
-          fi
-
-          # (b) foojay-resolver-convention <= 0.9.x quebra no Gradle 9 (JvmVendorSpec.IBM_SEMERU)
-          gmaj=${GRADLE_VERSION%%.*}
-          for s in settings.gradle.kts settings.gradle; do
-            [ -f "$s" ] || continue
-            v=$(grep -oE 'foojay-resolver-convention["'"'"')[:space:]]*version[[:space:]]*\(?["'"'"'][0-9.]+' "$s" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-            if [ -n "$v" ] && [ "$gmaj" -ge 9 ]; then
-              minor=$(echo "$v" | cut -d. -f1-2)
-              if [ "$(printf '%s\n0.10\n' "$minor" | sort -V | head -1)" != "0.10" ] && [ "$v" != "0.10.0" ]; then
-                problem "$s usa foojay-resolver-convention $v, incompatível com Gradle $GRADLE_VERSION"
-                sed -i -E "s/(foojay-resolver-convention[\"')[:space:]]*version[[:space:]]*\(?[\"'])$v/\11.0.0/" "$s" \
-                  && fixed "foojay-resolver-convention $v -> 1.0.0 em $s (funcionalidade preservada)"
-                grep -n foojay "$s"
-              fi
-            fi
-          done
-
-          # (c) keystores usados pelos signingConfigs
-          for k in "$APP_DIR"/zalith_launcher_debug.jks "$APP_DIR"/zalith_launcher.jks; do
-            [ -f "$k" ] && echo "keystore OK: $k" || problem "keystore ausente: $k"
-          done
-
-          # (e) caminho do ndk-build e fontes nativas
-          if [ -n "${NDK_MK_PATH:-}" ]; then
-            [ -f "$APP_DIR/$NDK_MK_PATH" ] && echo "Android.mk OK" || problem "Android.mk ausente: $APP_DIR/$NDK_MK_PATH"
-          fi
-          [ "$HAS_RUST" = "true" ] && { [ -f PetLib/rust/Cargo.lock ] && echo "Cargo.lock OK" || problem "Cargo.lock ausente"; }
-
-      - name: "Verificação do catálogo de dependências (libs.*)"
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          python3 - <<'PY'
-          import os, re, sys, glob
-          try:
-              import tomllib
-          except ImportError:
-              sys.exit(0)
-          t = tomllib.load(open("gradle/libs.versions.toml", "rb"))
-          norm = lambda s: s.replace("-", ".").replace("_", ".")
-          libs = {norm(k) for k in t.get("libraries", {})}
-          plugs = {norm(k) for k in t.get("plugins", {})}
-          bundles = {norm(k) for k in t.get("bundles", {})}
-          bad = []
-          for f in glob.glob("**/build.gradle*", recursive=True) + ["build.gradle.kts"]:
-              if not os.path.isfile(f): continue
-              s = open(f, encoding="utf-8", errors="ignore").read()
-              for m in re.finditer(r"libs\.plugins\.([A-Za-z0-9_.]+)", s):
-                  if not any(m.group(1) == p or m.group(1).startswith(p + ".") for p in plugs): bad.append((f, m.group(0)))
-              for m in re.finditer(r"libs\.(?!plugins|versions)([A-Za-z0-9_.]+)", s):
-                  a = m.group(1)
-                  if not (any(a == l or a.startswith(l + ".") for l in libs) or any(a.startswith(b) for b in bundles)):
-                      bad.append((f, m.group(0)))
-          print("aliases ausentes:", bad or "nenhum")
-          sys.exit(1 if bad else 0)
-          PY 
-
-      - name: "Segunda verificação (após as correções)"
-        run: |
-          cd "$PROJECT_DIR"
-          fail=0
-          if ! test -x gradlew; then
-            echo "::error::gradlew continua sem permissão"
-                        fail=1
-          fi
-          for f in gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties "$APP_DIR/src/main/AndroidManifest.xml"; do
-            if [ ! -f "$f" ]; then
-              echo "::error::arquivo ausente: $f"
-              fail=1
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "Segunda verificação FALHOU" >> "$REPORT_DIR/problems.txt"
-            exit 1
-          fi
-          echo "Segunda verificação OK"
-
-      - name: Instalar JDKs necessários
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ env.JDK_LIST }}
-
-      - name: Instalar Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Instalar NDK
-        if: env.NDK_VERSION != ''
-        run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "ndk;${NDK_VERSION}"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
-
-      - name: Instalar Rust (se o projeto usar)
-        if: env.HAS_RUST == 'true'
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
-
-      - name: Configurar Gradle
-        uses: gradle/actions/setup-gradle@v4      - name: Decidir tipos de build
-        run: |
-          debug=false; release=false
-          has_secrets=false
-          if [ -n "${STORE_PASSWORD:-}" ] && [ -n "${KEY_PASSWORD:-}" ]; then has_secrets=true; fi
-          case "$BUILD_TYPE" in
-            debug)   debug=true ;;
-            release) release=true ;;
-            both)    debug=true; release=true ;;
-            *)       debug=true; [ "$has_secrets" = "true" ] && release=true ;;
-          esac
-          if [ "$release" = "true" ] && [ "$has_secrets" != "true" ]; then
-            echo "::warning::Release pedido, mas faltam STORE_PASSWORD/KEY_PASSWORD. Release será ignorado."
-            echo "Release ignorado: secrets de assinatura ausentes" >> "$REPORT_DIR/problems.txt"
-            release=false
-          fi
-          echo "BUILD_DEBUG=$debug" >> "$GITHUB_ENV"
-          echo "BUILD_RELEASE=$release" >> "$GITHUB_ENV"
-          echo "Debug=$debug Release=$release"
-
-      - name: Compilar Debug
-        if: env.BUILD_DEBUG == 'true'
-        run: |
-          cd "$PROJECT_DIR"
-          ./gradlew "${APP_PATH}:assembleDebug" --stacktrace --no-daemon
-
-      - name: Compilar Release
-        if: env.BUILD_RELEASE == 'true'
-        run: |
-          cd "$PROJECT_DIR"
-          ./gradlew "${APP_PATH}:assembleRelease" --stacktrace --no-daemon      - name: Coletar APKs
-        if: always()
-        run: |
-          mkdir -p /tmp/apks
-          cd "$PROJECT_DIR/$APP_DIR"
-          find build/outputs/apk -type f -name '*.apk' 2>/dev/null | while read -r f; do
-            name=$(basename "$f")
-            if [ "$ARCH" != "all" ]; then
-              case "$name" in
-                *"$ARCH"*) ;;
-                *universal*) ;;
-                *) continue ;;
-              esac
-            fi
-            cp "$f" "/tmp/apks/$name"
-          done
-          ls -lh /tmp/apks || true
-          if [ -z "$(ls -A /tmp/apks 2>/dev/null)" ]; then
-            echo "::warning::Nenhum APK encontrado para a arquitetura '$ARCH'."
-          fi
-
-      - name: Publicar APKs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ZalithLauncher2-APK-${{ env.ARCH }}
-          path: /tmp/apks/*.apk
-          if-no-files-found: warn
-
-      - name: Publicar relatório
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: relatorio-verificacao
-          path: /tmp/zreport/
-          if-no-files-found: ignore
-
-      - name: Resumo
-        if: always()
-        run: |
-          {
-            echo "## Resumo da execução"
-            echo "- ZIPs esperados/encontrados/aprovados: ${ZIPS_EXPECTED:-?}/${ZIPS_FOUND:-?}/${ZIPS_OK:-?}"
-            echo "- Arquivos extraídos: ${FILES_EXTRACTED:-?}"
-            echo "- Gradle ${GRADLE_VERSION:-?} | AGP ${AGP_VERSION:-?} | JDK ${JDK_MAIN:-?}"
-            echo "### Problemas"
-            cat "$REPORT_DIR/problems.txt" 2>/dev/null || true
-            echo "### Correções automáticas"
-            cat "$REPORT_DIR/fixed.txt" 2>/dev/null || true
-                              } >> "$GITHUB_STEP_SUMMARY" # fim do arquivo
-
+              "PROJECT_DIR":
