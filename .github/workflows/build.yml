@@ -510,4 +510,6 @@ jobs:
             cat "$REPORT_DIR/problems.txt" 2>/dev/null || true
             echo "### Correções automáticas"
             cat "$REPORT_DIR/fixed.txt" 2>/dev/null || true
-                    } >> "$GITHUB_STEP_SUMMARY"
+                              } >> "$GITHUB_STEP_SUMMARY"
+
+# fim do arquivo
