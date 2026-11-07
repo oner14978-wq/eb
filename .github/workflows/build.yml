@@ -299,6 +299,7 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+          cargo install cargo-ndk --locked 2>&1 | tail -n 5
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -377,6 +378,7 @@ jobs:
       - name: Resumo
         if: always()
         run: |
+          set +e +o pipefail
           {
             echo "## Resumo da execução"
             echo "- ZIPs esperados/encontrados/aprovados: ${ZIPS_EXPECTED:-?}/${ZIPS_FOUND:-?}/${ZIPS_OK:-?}"
@@ -394,4 +396,5 @@ jobs:
               echo '```'
             done
           } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
           
