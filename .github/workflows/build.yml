@@ -326,9 +326,18 @@ jobs:
           fixed()   { echo "$1" >> "$REPORT_DIR/fixed.txt"; echo "CORRIGIDO: $1"; }
           problem() { echo "$1" >> "$REPORT_DIR/problems.txt"; echo "::warning::PROBLEMA: $1"; }
 
-          # (a) permissão de execução do wrapper (ZIP/Git podem perder o bit)
+          # (a) garantir execução do Gradle Wrapper, mesmo quando o ZIP perde o bit
+          if [ ! -f gradlew ]; then
+            echo "::error::gradlew não existe em $PROJECT_DIR"
+            exit 1
+          fi
           if [ ! -x gradlew ]; then
-            problem "gradlew sem permissão de execução"; chmod +x gradlew && fixed "chmod +x gradlew"
+            chmod u+x gradlew || { echo "::error::Não foi possível conceder permissão de execução a gradlew"; exit 1; }
+            fixed "permissão de execução concedida a gradlew"
+          fi
+          if [ ! -x gradlew ]; then
+            echo "::error::gradlew continua sem permissão de execução após chmod"
+            exit 1
           fi
 
           # (b) foojay-resolver-convention incompatível com Gradle 9
@@ -392,13 +401,4 @@ jobs:
           plugs = {norm(k) for k in t.get("plugins", {})}
           bundles = {norm(k) for k in t.get("bundles", {})}
           bad = []
-          gradle_files = glob.glob("**/build.gradle*", recursive=True)
-          if "build.gradle.kts" not in gradle_files:
-              gradle_files.append("build.gradle.kts")
-          for f in gradle_files:
-              if not os.path.isfile(f):
-                  continue
-              with open(f, encoding="utf-8", errors="ignore") as source_file:
-                  source_text = source_file.read()
-
-              # Verifica 
+          gradle_files = glob.glob("**/build.gradle*", recursive=T
