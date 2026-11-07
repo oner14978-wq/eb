@@ -52,22 +52,21 @@ jobs:
           )
 
           if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
-            echo "ERRO: Nenhum ZIP Zalith foi encontrado."
+            echo "::error title=ZIP não encontrado::Nenhum arquivo ZIP Zalith foi encontrado."
             exit 1
           fi
 
-          echo "ZIPs encontrados:"
-          printf '%s\n' "${ZIP_FILES[@]}"
+          echo "ZIPs encontrados: ${#ZIP_FILES[@]}"
 
           for ZIP_FILE in "${ZIP_FILES[@]}"; do
-            echo "Verificando: $ZIP_FILE"
+            echo "Verificando: $(basename "$ZIP_FILE")"
 
-            if ! unzip -t "$ZIP_FILE"; then
-              echo "ZIP inválido: $ZIP_FILE"
+            if ! unzip -t "$ZIP_FILE" >/dev/null 2>&1; then
+              echo "::error title=ZIP inválido::O arquivo $(basename "$ZIP_FILE") está corrompido."
               exit 1
             fi
 
-            unzip -o "$ZIP_FILE" -d extracted/merged
+            unzip -oq "$ZIP_FILE" -d extracted/merged
           done
 
           find extracted/merged -maxdepth 3 -type f \
@@ -86,8 +85,8 @@ jobs:
           while IFS= read -r FILE; do
             DIR="$(dirname "$FILE")"
 
-            if [ -f "$DIR/gradlew" ] && \
-               { [ -f "$DIR/settings.gradle" ] || [ -f "$DIR/settings.gradle.kts" ]; }; then
+            if [ -f "$DIR/settings.gradle" ] || \
+               [ -f "$DIR/settings.gradle.kts" ]; then
               PROJECT_ROOT="$DIR"
               break
             fi
@@ -99,13 +98,17 @@ jobs:
           )
 
           if [ -z "$PROJECT_ROOT" ]; then
-            echo "ERRO: Projeto Gradle não encontrado."
-            find extracted/merged -maxdepth 4 -type f | sort
+            echo "::error title=Projeto Gradle não encontrado::Não foi encontrado gradlew junto com settings.gradle."
+            exit 1
+          fi
+
+          if [ ! -d "$PROJECT_ROOT/ZalithLauncher" ]; then
+            echo "::error title=Módulo ausente::O módulo ZalithLauncher não foi encontrado no projeto selecionado."
             exit 1
           fi
 
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-          echo "Projeto encontrado: $PROJECT_ROOT"
+          echo "Projeto Gradle localizado."
 
       # 5. Verificar estrutura do launcher
       - name: Verify Zalith Launcher source
@@ -114,13 +117,14 @@ jobs:
           set -euo pipefail
 
           if [ ! -d "$PROJECT_ROOT/ZalithLauncher/src" ]; then
-            echo "ERRO: ZalithLauncher/src não encontrado."
-            find "$PROJECT_ROOT" -maxdepth 4 -type d | sort
+            echo "::error title=Código-fonte ausente::ZalithLauncher/src não foi encontrado."
             exit 1
           fi
 
           echo "Código-fonte encontrado."
-          ls -la "$PROJECT_ROOT/ZalithLauncher/src/main"
+          echo "Estrutura principal:"
+          find "$PROJECT_ROOT/ZalithLauncher/src/main" \
+            -maxdepth 2 -type d | sort | sed -n '1,20p'
 
       # 6. Configurar Java 17
       - name: Setup Java 17
@@ -141,16 +145,18 @@ jobs:
           set +e
           set +o pipefail
 
-          yes | sdkmanager --licenses
+          yes | sdkmanager --licenses >/dev/null 2>&1
           STATUS=${PIPESTATUS[1]}
 
           set -o pipefail
           set -e
 
           if [ "$STATUS" -ne 0 ]; then
-            echo "Falha ao aceitar licenças Android SDK."
+            echo "::error title=Licenças Android::Não foi possível aceitar as licenças do Android SDK."
             exit "$STATUS"
           fi
+
+          echo "Licenças Android aceitas."
 
       # 9. Instalar plataformas, ferramentas e NDK
       - name: Install Android SDK components
@@ -163,6 +169,8 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;25.2.9519653"
+
+          echo "Componentes Android instalados."
 
       # 10. Instalar Rust e cargo-ndk
       - name: Setup Rust and cargo-ndk
@@ -189,7 +197,6 @@ jobs:
             i686-linux-android \
             x86_64-linux-android
 
-          # cargo-ndk é chamado como "cargo ndk"
           if ! cargo ndk --version >/dev/null 2>&1; then
             cargo install cargo-ndk --locked
           fi
@@ -197,29 +204,24 @@ jobs:
           SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 
           if [ -z "$SDK_PATH" ]; then
-            echo "ERRO: Android SDK não encontrado."
+            echo "::error title=Android SDK ausente::O caminho do Android SDK não foi definido."
             exit 1
           fi
 
           NDK_PATH="$SDK_PATH/ndk/25.2.9519653"
 
           if [ ! -d "$NDK_PATH" ]; then
-            echo "ERRO: NDK não encontrado: $NDK_PATH"
+            echo "::error title=NDK ausente::NDK 25.2.9519653 não foi encontrado."
             exit 1
           fi
 
           echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
 
-          echo "Verificando Rust:"
-          rustc --version
-          cargo --version
-
-          echo "Verificando cargo-ndk:"
-          cargo ndk --version
-
-          echo "NDK encontrado:"
-          echo "$NDK_PATH"
+          echo "Rust: $(rustc --version)"
+          echo "Cargo: $(cargo --version)"
+          echo "Cargo NDK: $(cargo ndk --version)"
+          echo "NDK configurado."
 
       # 11. Corrigir imports e API experimental do Kotlin
       - name: Fix Kotlin Compose compilation issues
@@ -227,14 +229,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          python3 - <<'PY'
+          python3 - "$PROJECT_ROOT" <<'PY'
           from pathlib import Path
           import re
           import sys
 
-          root = Path(
-              "extracted/merged/ZalithLauncher/src/main/java/"
-              "com/movtery/zalithlauncher/ui/screens/content/home"
+          project = Path(sys.argv[1])
+
+          root = (
+              project
+              / "ZalithLauncher/src/main/java/"
+                "com/movtery/zalithlauncher/ui/screens/content/home"
           )
 
           dashboard = root / "HomeDashboard.kt"
@@ -283,8 +288,24 @@ jobs:
               ")"
           )
 
-          if optin not in source:
-              source = optin + "\n\n" + source
+          if "ExperimentalMaterial3Api::class" not in source:
+              package_match = re.search(
+                  r"^package\s+[^\n]+\n",
+                  source,
+                  re.MULTILINE
+              )
+
+              if not package_match:
+                  print("ERRO: package não encontrado em HomeHeroBanner.kt.")
+                  sys.exit(1)
+
+              source = (
+                  source[:package_match.start()]
+                  + optin
+                  + "\n\n"
+                  + source[package_match.start():]
+              )
+
               hero.write_text(source, encoding="utf-8")
               print("OptIn Material 3 adicionado.")
           else:
@@ -293,13 +314,7 @@ jobs:
           print("Verificação Kotlin concluída.")
           PY
 
-          echo "Import weight:"
-          grep -n "foundation.layout.weight" \
-            "$PROJECT_ROOT/ZalithLauncher/src/main/java/com/movtery/zalithlauncher/ui/screens/content/home/HomeDashboard.kt" || true
-
-          echo "API experimental:"
-          grep -n "ExperimentalMaterial3Api" \
-            "$PROJECT_ROOT/ZalithLauncher/src/main/java/com/movtery/zalithlauncher/ui/screens/content/home/HomeHeroBanner.kt" || true
+          echo "Correções Kotlin verificadas."
 
       # 12. Diagnóstico do projeto
       - name: Diagnose project configuration
@@ -307,23 +322,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Gradle root: $PROJECT_ROOT"
+          {
+            echo "Gradle root: $PROJECT_ROOT"
 
-          echo "Módulos Gradle:"
-          find "$PROJECT_ROOT" -maxdepth 3 \
-            \( -name build.gradle -o -name build.gradle.kts \) \
-            -print | sort
+            echo ""
+            echo "Módulos Gradle:"
+            find "$PROJECT_ROOT" -maxdepth 3 \
+              \( -name build.gradle -o -name build.gradle.kts \) \
+              -print | sort
 
-          echo "Diretórios LWJGL:"
-          find "$PROJECT_ROOT" -type d -iname '*lwjgl*' -print
+            echo ""
+            echo "Diretórios LWJGL:"
+            find "$PROJECT_ROOT" -type d -iname '*lwjgl*' -print
 
-          echo "Diretórios patches:"
-          find "$PROJECT_ROOT" -type d -path '*/LWJGL/patches' -print
+            echo ""
+            echo "Diretórios patches:"
+            find "$PROJECT_ROOT" -type d \
+              -path '*/LWJGL/patches' -print
 
-          echo "Arquivos de configuração:"
-          find "$PROJECT_ROOT" -maxdepth 2 \
-            \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -print
+            echo ""
+            echo "Arquivos de configuração:"
+            find "$PROJECT_ROOT" -maxdepth 2 \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -print
+          } > "$GITHUB_WORKSPACE/project-diagnostics.txt"
+
+          echo "Diagnóstico estrutural concluído."
 
       # 13. Preparar Gradle
       - name: Prepare Gradle
@@ -334,60 +358,84 @@ jobs:
           cd "$PROJECT_ROOT"
           chmod +x ./gradlew
 
-          ./gradlew \
+          if ! ./gradlew \
             --no-daemon \
             --console=plain \
-            tasks --all
+            tasks --all \
+            > "$GITHUB_WORKSPACE/gradle-tasks.log" 2>&1; then
 
-      # 14. Compilar APK Debug
+            echo "::error title=Preparação Gradle falhou::Não foi possível carregar as tarefas do projeto."
+
+            grep -E \
+              'What went wrong:|Could not|failed|ERROR|Error:' \
+              "$GITHUB_WORKSPACE/gradle-tasks.log" \
+              | tail -n 8 || true
+
+            exit 1
+          fi
+
+          echo "Gradle preparado."
+
+      # 14. Compilar APK Debug com resumo curto de erros
       - name: Build Zalith Launcher APK
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           cd "$PROJECT_ROOT"
           source "$HOME/.cargo/env"
 
-          echo "Rust:"
-          rustc --version
+          LOG="$GITHUB_WORKSPACE/build.log"
 
-          echo "Cargo:"
-          cargo --version
-
-          echo "Cargo NDK:"
-          cargo ndk --version
-
-          test -d "$ANDROID_NDK_HOME"
-
-          set +e
+          echo "Iniciando compilação do Zalith Launcher 2..."
+          echo "O log completo será salvo para diagnóstico."
 
           ./gradlew \
             --no-daemon \
             --console=plain \
             --warning-mode summary \
             :ZalithLauncher:assembleDebug \
-            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+            > "$LOG" 2>&1
 
-          STATUS=${PIPESTATUS[0]}
-
-          set -e
+          STATUS=$?
 
           if [ "$STATUS" -ne 0 ]; then
-            echo "========== ERROS DE COMPILAÇÃO =========="
+            echo ""
+            echo "::error title=BUILD FAILED::A compilação do APK falhou. Consulte o resumo abaixo."
+
+            echo ""
+            echo "========== RESUMO DA FALHA =========="
 
             grep -n -E \
-              '(^e: |FAILED|What went wrong|Compilation error|HomeDashboard\.kt|HomeHeroBanner\.kt|\.kt:[0-9]+:[0-9]+|error:|Unresolved reference|Type mismatch|Caused by)' \
-              "$GITHUB_WORKSPACE/build.log" \
-              -A8 -B5 | sed -n '1,240p' || true
+              'What went wrong:|Execution failed for task|Compilation error|Unresolved reference|Type mismatch|e: file://|error:|\.kt:[0-9]+:[0-9]+' \
+              "$LOG" \
+              | tail -n 15 || true
 
-            echo "========== FINAL DO LOG =========="
+            echo ""
+            echo "========== CAUSA DO GRADLE =========="
 
-            tail -n 160 "$GITHUB_WORKSPACE/build.log"
+            grep -A 8 -E \
+              'What went wrong:' \
+              "$LOG" \
+              | tail -n 12 || true
+
+            echo ""
+            echo "========== TAREFA QUE FALHOU =========="
+
+            grep -E \
+              '^> Task .* FAILED|Execution failed for task' \
+              "$LOG" \
+              | tail -n 5 || true
+
+            echo ""
+            echo "O log completo está no artefato:"
+            echo "Zalith-Build-Diagnostics"
 
             exit "$STATUS"
           fi
 
-          echo "Compilação concluída."
+          echo ""
+          echo "APK compilado com sucesso."
 
       # 15. Localizar e organizar APK
       - name: Locate generated APK
@@ -401,25 +449,34 @@ jobs:
             find "$PROJECT_ROOT" \
               -type f \
               -path '*/build/outputs/apk/debug/*.apk' \
-              -print
+              -print | sort
           )
 
           if [ "${#APK_FILES[@]}" -eq 0 ]; then
-            echo "ERRO: APK não encontrado."
-            find "$PROJECT_ROOT" -type f -name '*.apk' -print
+            echo "::error title=APK não encontrado::A compilação terminou, mas nenhum APK Debug foi localizado."
             exit 1
           fi
 
           for APK in "${APK_FILES[@]}"; do
             echo "APK encontrado: $APK"
-            cp "$APK" "$GITHUB_WORKSPACE/final-apk/$(basename "$APK")"
+
+            DEST="$GITHUB_WORKSPACE/final-apk/$(basename "$APK")"
+
+            if [ -e "$DEST" ]; then
+              echo "::error title=APK duplicado::Dois APKs possuem o mesmo nome: $(basename "$APK")"
+              exit 1
+            fi
+
+            cp "$APK" "$DEST"
           done
 
+          echo ""
+          echo "APKs gerados:"
           ls -lh "$GITHUB_WORKSPACE/final-apk"
 
       # 16. Enviar APK como artefato - Node.js 24
       - name: Upload Zalith Launcher APK
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: Zalith-Launcher-2-APK-Debug
           path: final-apk/*.apk
@@ -429,13 +486,14 @@ jobs:
       # 17. Enviar diagnósticos em caso de falha - Node.js 24
       - name: Upload build diagnostics
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: Zalith-Build-Diagnostics
           path: |
             build.log
+            gradle-tasks.log
+            project-diagnostics.txt
             zip_diagnostics/
-            extracted/
           if-no-files-found: warn
           retention-days: 7
           
