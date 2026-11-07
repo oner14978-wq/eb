@@ -395,6 +395,6 @@ jobs:
           for f in glob.glob("**/build.gradle*", recursive=True) + ["build.gradle.kts"]:
               if not os.path.isfile(f): continue
               s = open(f, encoding="utf-8", errors="ignore").read()
+              # Percorre todas as referências aos aliases de plugins do catálogo Gradle.
               for m in re.finditer(r"libs\.plugins\.([A-Za-z0-9_.]+)", s):
-                  if not any(m.group(1) == p or m.group(1).startswith(p + ".") for p in plugs): bad.append((f, m.group(0)))
-              for m in re.fi
+                  if not any(m.group(1) == p or m.group(1).star
