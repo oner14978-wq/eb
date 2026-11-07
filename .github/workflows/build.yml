@@ -189,7 +189,7 @@ jobs:
             i686-linux-android \
             x86_64-linux-android
 
-          # cargo-ndk deve ser chamado como "cargo ndk"
+          # cargo-ndk é chamado como "cargo ndk"
           if ! cargo ndk --version >/dev/null 2>&1; then
             cargo install cargo-ndk --locked
           fi
@@ -245,7 +245,6 @@ jobs:
                   print(f"ERRO: Arquivo não encontrado: {file}")
                   sys.exit(1)
 
-          # Verificar import de weight
           source = dashboard.read_text(encoding="utf-8")
 
           weight_import = (
@@ -276,7 +275,6 @@ jobs:
           else:
               print("Import weight já existe.")
 
-          # Autorizar API experimental do Material 3
           source = hero.read_text(encoding="utf-8")
 
           optin = (
@@ -348,7 +346,6 @@ jobs:
           set -euo pipefail
 
           cd "$PROJECT_ROOT"
-
           source "$HOME/.cargo/env"
 
           echo "Rust:"
@@ -376,7 +373,6 @@ jobs:
           set -e
 
           if [ "$STATUS" -ne 0 ]; then
-            echo ""
             echo "========== ERROS DE COMPILAÇÃO =========="
 
             grep -n -E \
@@ -384,7 +380,6 @@ jobs:
               "$GITHUB_WORKSPACE/build.log" \
               -A8 -B5 | sed -n '1,240p' || true
 
-            echo ""
             echo "========== FINAL DO LOG =========="
 
             tail -n 160 "$GITHUB_WORKSPACE/build.log"
@@ -422,19 +417,19 @@ jobs:
 
           ls -lh "$GITHUB_WORKSPACE/final-apk"
 
-      # 16. Enviar APK como artefato
+      # 16. Enviar APK como artefato - Node.js 24
       - name: Upload Zalith Launcher APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Zalith-Launcher-2-APK-Debug
           path: final-apk/*.apk
           if-no-files-found: error
           retention-days: 14
 
-      # 17. Enviar diagnósticos em caso de falha
+      # 17. Enviar diagnósticos em caso de falha - Node.js 24
       - name: Upload build diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Zalith-Build-Diagnostics
           path: |
