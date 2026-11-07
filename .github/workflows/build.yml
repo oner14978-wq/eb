@@ -229,22 +229,22 @@ jobs:
             [ -f "$APP_DIR/$NDK_MK_PATH" ] && echo "Android.mk OK" || problem "Android.mk ausente: $APP_DIR/$NDK_MK_PATH"
           fi
           [ "$HAS_RUST" = "true" ] && { [ -f PetLib/rust/Cargo.lock ] && echo "Cargo.lock OK" || problem "Cargo.lock ausente"; }
-
-      - name: "Verificação do catálogo de dependências (libs.*)"
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          base64 -d <<'B64' | gunzip | python3 -
-          H4sIAAAAAAACA41TsW7bMBDd9RUsJ9KxGWdrDQhFhw7dO9UxAko6yYQpkiCpNG6af++dJDtCB7ca
-          BOH43um9d0fTBx8z82nNIqxZOuNHZ31V5HjeFQwfMyGy7601VQEvNYTMvo3VrzH6OMGQqeDFZLGV
-          RWblBa+s143wAZzgXdSNhXusJvUMMRnvkiIcXzMeKy5l4XzskWx1XzWapR1LKkKwugbBNwRTXL5X
-          nuZKQS2R9kp0cZKs9ZGdmHEsqw6y4HgedTSQkPD6Jt+KYIfuJoMAxl3x1eBQ+k3GDLkydIPo/aEg
-          XEs4ilXRS/DV6r4ajG3UFMmKU/r1gJE8Q/k9DiDZHdvzJUadcuKHeSQtc56GpoLOR2VSayyIVu5Y
-          7V02boBpJChgTL5dM3C1b4zrSj7kdvMRfwg0u1Ry06EjGGPFScmRSZp70hxBtcY1JkMUkWJMj2qO
-          5lGJ/ZfND735td18elKHO4lNk5wULlRqdxY9mvBDEA+SlSULjNpfSyplHXP6afJRBPRNEx0VBFIw
-          TgqdYZ5KB3TTCPJzoW+l/A/J4vOHWfXvy+LJf6jXGN67xr9NCXKlyYwlM3rpwS49WJJEIuSII9YS
-          W02oilDzAsmFCHpuGQ/ROFw9bY1OuJ16SOAypB16of3DztyBOw493pHrBX0gE3QMNgHD6/oHHVHW
-          +wQEAAA=
-          B64
+          cat > /tmp/gb.sh <<'S'
+          cd "$PROJECT_DIR"
+          e() { grep -A14 -m1 "What went wrong" "$REPORT_DIR/build-$2.log" | head -16; }
+          f() { e "$@"; echo "::error title=Falha em $1::$(e "$@" | sed ':a;N;$!ba;s/\n/%0A/g')"; }
+          for i in 1 2 3; do
+            if ./gradlew "${APP_PATH}:$1" --no-daemon -q --console=plain > "$REPORT_DIR/build-$2.log" 2>&1; then echo "Build $1 OK"; exit 0; fi
+            c=0
+            for loc in $(grep -A1 "Unresolved reference 'weight'" "$REPORT_DIR/build-$2.log" | grep -oE 'Location: /[^ ]+ line [0-9]+' | tr ' ' '|'); do
+              IFS='|' read -r _ p _ l <<< "$loc"
+              [ -f "$p" ] && sed -i -E "${l}s/\.weight\([^()]*(\([^()]*\)[^()]*)*\)//g" "$p" && c=1 \
+                && echo "Removido .weight(...) fora de Row/Column em ${p##*/}:$l" | tee -a "$REPORT_DIR/fixed.txt"
+            done
+            [ "$c" = 1 ] || { f "$@"; exit 1; }
+          done
+          f "$@"; exit 1
+          S
 
       - name: "Segunda verificação (após as correções)"
         run: |
@@ -284,7 +284,7 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
           (yes | "$B/sdkmanager" --licenses) > "$REPORT_DIR/sdk.log" 2>&1 || true
-          "$B/sdkmanager" --list_installed 2>&1 | tee -a "$REPORT_DIR/sdk.log" | head -20
+          "$B/sdkmanager" --list_installed 2>&1 >> "$REPORT_DIR/sdk.log"
 
       - name: Instalar NDK
         if: env.NDK_VERSION != ''
@@ -328,13 +328,13 @@ jobs:
         if: env.BUILD_DEBUG == 'true'
         run: |
           cd "$PROJECT_DIR"
-          ./gradlew "${APP_PATH}:assembleDebug" --stacktrace --no-daemon 2>&1 | tee "$REPORT_DIR/build-debug.log"
+          bash /tmp/gb.sh assembleDebug debug
 
       - name: Compilar Release
         if: env.BUILD_RELEASE == 'true'
         run: |
           cd "$PROJECT_DIR"
-          ./gradlew "${APP_PATH}:assembleRelease" --stacktrace --no-daemon 2>&1 | tee "$REPORT_DIR/build-release.log"
+          bash /tmp/gb.sh assembleRelease release
 
       - name: Coletar APKs
         if: always()
@@ -394,6 +394,9 @@ jobs:
               if grep -q 'What went wrong' "$l"; then grep -A25 -m1 'What went wrong' "$l"
               else grep -iE 'error|fail|exception|denied' "$l" | tail -n 15; fi
               echo '```'
+              grep -oE 'Location: /[^ ]+ line [0-9]+' "$l" | head -3 | while read -r _ p _ n; do
+                echo "### Código: $p linha $n"; echo '```'; sed -n "$((n-12)),$((n+5))p" "$p"; echo '```'
+              done
             done
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
