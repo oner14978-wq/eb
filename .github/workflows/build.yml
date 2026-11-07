@@ -258,6 +258,14 @@ jobs:
           [ -x gradlew ] || { echo "::error::gradlew sem permissão"; exit 1; }
           echo "Segunda verificação OK"
 
+      - name: Conferir runtimes Java embutidos
+        run: |
+          for v in 8 17 21 25; do
+            s=$(find "$SRC_ROOT" -path "*runtimes/jre-$v/universal.tar.xz" -printf '%s' 2>/dev/null | head -c 12)
+            echo "Java $v: ${s:-0} bytes"
+            [ "${s:-0}" -gt 1000000 ] || echo "Java $v ausente ou vazio nos ZIPs (${s:-0} bytes): o app não instala esse runtime" >> "$REPORT_DIR/problems.txt"
+          done
+
       - name: Instalar JDKs necessários
         uses: actions/setup-java@v4
         with:
