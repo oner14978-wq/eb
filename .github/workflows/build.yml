@@ -258,6 +258,26 @@ jobs:
           [ -x gradlew ] || { echo "::error::gradlew sem permissão"; exit 1; }
           echo "Segunda verificação OK"
 
+      - name: Adicionar Java 21 e 25 ao projeto
+        run: |
+          set -eu
+          ASSETS=$(find "$SRC_ROOT" -type d -path "*/src/main/assets/runtimes" | sort | head -1)
+          [ -n "$ASSETS" ] || { echo "::error::pasta assets/runtimes não encontrada em $SRC_ROOT"; exit 1; }
+          mkdir -p "$ASSETS/jre-21" "$ASSETS/jre-25"
+          J21="$GITHUB_WORKSPACE/jre-21-universal.tar.xz"
+          J25="$GITHUB_WORKSPACE/jre-25-universal.tar.xz"
+          [ -f "$J21" ] || { echo "::error::jre-21-universal.tar.xz ausente na raiz do repositório"; exit 1; }
+          cp "$J21" "$ASSETS/jre-21/universal.tar.xz"
+          if [ -f "$J25" ]; then
+            cp "$J25" "$ASSETS/jre-25/universal.tar.xz"
+          else
+            ls "$J25".part* >/dev/null 2>&1 || { echo "::error::jre-25-universal.tar.xz (ou suas partes .part00/.part01) ausente na raiz do repositório"; exit 1; }
+            cat "$J25".part* > "$ASSETS/jre-25/universal.tar.xz"
+          fi
+          xz -t "$ASSETS/jre-21/universal.tar.xz" "$ASSETS/jre-25/universal.tar.xz"
+          echo "Java 21 e 25 adicionados em $ASSETS"
+          ls -l "$ASSETS/jre-21" "$ASSETS/jre-25"
+
       - name: Conferir runtimes Java embutidos
         run: |
           for v in 8 17 21 25; do
@@ -376,23 +396,4 @@ jobs:
           set +e +o pipefail
           {
             echo "## Resumo da execução"
-            echo "- ZIPs esperados/encontrados/aprovados: ${ZIPS_EXPECTED:-?}/${ZIPS_FOUND:-?}/${ZIPS_OK:-?}"
-            echo "- Arquivos extraídos: ${FILES_EXTRACTED:-?}"
-            echo "- Gradle ${GRADLE_VERSION:-?} | AGP ${AGP_VERSION:-?} | JDK ${JDK_MAIN:-?}"
-            echo "### Problemas"
-            cat "$REPORT_DIR/problems.txt" 2>/dev/null || true
-            echo "### Correções automáticas"
-            cat "$REPORT_DIR/fixed.txt" 2>/dev/null || true
-            for l in "$REPORT_DIR"/*.log; do
-              [ -f "$l" ] || continue
-              echo "### Log: $(basename "$l")"; echo '```'
-              if grep -q 'What went wrong' "$l"; then grep -A25 -m1 'What went wrong' "$l"
-              else grep -iE 'error|fail|exception|denied' "$l" | tail -n 15; fi
-              echo '```'
-              grep -oE 'Location: /[^ ]+ line [0-9]+' "$l" | head -3 | while read -r _ p _ n; do
-                echo "### Código: $p linha $n"; echo '```'; sed -n "$((n-12)),$((n+5))p" "$p"; echo '```'
-              done
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-          
+            echo "- ZIPs esperados/encontrados/aprovados: ${ZIPS_EXPECTED:
