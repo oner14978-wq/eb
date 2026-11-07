@@ -345,23 +345,25 @@ jobs:
       - name: Coletar APKs
         if: always()
         run: |
+          set +e +o pipefail
           mkdir -p /tmp/apks
-          cd "$PROJECT_DIR/$APP_DIR"
-          find build/outputs/apk -type f -name '*.apk' 2>/dev/null | while read -r f; do
+          find "${PROJECT_DIR:-.}" -type f -name '*.apk' -path '*/build/outputs/apk/*' 2>/dev/null > /tmp/apklist.txt
+          while read -r f; do
+            [ -n "$f" ] || continue
             name=$(basename "$f")
             if [ "$ARCH" != "all" ]; then
               case "$name" in
-                *"$ARCH"*) ;;
-                *universal*) ;;
+                *"$ARCH"*|*universal*) ;;
                 *) continue ;;
               esac
             fi
             cp "$f" "/tmp/apks/$name"
-          done
-          ls -lh /tmp/apks || true
+          done < /tmp/apklist.txt
+          ls -lh /tmp/apks
           if [ -z "$(ls -A /tmp/apks 2>/dev/null)" ]; then
-            echo "::warning::Nenhum APK encontrado para a arquitetura '$ARCH'."
+            echo "::warning::Nenhum APK gerado. Veja qual passo anterior (Compilar Debug/Release) falhou."
           fi
+          exit 0
 
       - name: Publicar APKs
         if: always()
